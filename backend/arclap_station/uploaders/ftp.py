@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, pick_bool, register
 
 
 class FTPUploader:
@@ -18,14 +18,24 @@ class FTPUploader:
     def __init__(self, uploader_id: str, name: str, config: dict[str, Any]) -> None:
         self.id = uploader_id
         self.name = name
-        self.host = config["host"]
-        self.port = int(config.get("port", 21))
-        self.username = config.get("username", "anonymous")
-        self.password = config.get("password", "")
-        self.root = (config.get("path") or "/").rstrip("/") or "/"
-        self.passive = bool(config.get("passive", True))
-        self.use_tls = bool(config.get("tls", False))
-        self.timeout = float(config.get("timeout_seconds", 15))
+        host = pick(config, "host", "hostname")
+        if not host:
+            raise ValueError("ftp uploader requires 'host'")
+        self.host = host
+        self.port = int(pick(config, "port", default=21))
+        self.username = pick(config, "username", "user", "login", default="anonymous")
+        self.password = pick(config, "password", "passwd", "pass", default="")
+        self.root = str(pick(config, "path", "remote_path", "root", default="/")).rstrip("/") or "/"
+        # `passive` is the canonical key; `mode == "passive"` or "active" is
+        # the UI form. `security` field from the UI form maps to `tls`.
+        self.passive = pick_bool(
+            config, "passive",
+            default=str(pick(config, "mode", default="passive")).lower() == "passive",
+        )
+        # UI sends `security: "ftps" | "ftp"`; backend reads `tls: bool`.
+        sec = str(pick(config, "security", default="")).lower()
+        self.use_tls = pick_bool(config, "tls", "ftps", default=sec in ("ftps", "tls"))
+        self.timeout = float(pick(config, "timeout_seconds", "timeout", default=15))
 
     def _connect(self) -> ftplib.FTP:
         if self.use_tls:

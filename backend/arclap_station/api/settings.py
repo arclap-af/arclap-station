@@ -7,8 +7,8 @@ import platform
 import socket
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
+from pydantic import BaseModel, Field
 from starlette.websockets import WebSocketDisconnect
 
 from arclap_station.api.deps import require_session
@@ -140,6 +140,172 @@ async def unpair(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]
     cfg = get_station_store().update(pair_token=None, paired=False)
     audit_emit("user", "cloud.unpair", {})
     return cfg.to_dict()
+
+
+# ----- Danger Zone --------------------------------------------------------
+
+class RestartRequest(BaseModel):
+    unit: str = "arclap-station"
+
+
+@router.post("/restart-service")
+async def restart_service(
+    payload: RestartRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Restart a systemd unit. Allowlisted to arclap-* + caddy for safety."""
+    import subprocess  # noqa: PLC0415
+
+    allowed = {
+        "arclap-station",
+        "arclap-station.service",
+        "arclap-camera-watchdog",
+        "arclap-camera-watchdog.timer",
+        "arclap-retention",
+        "arclap-retention.timer",
+        "arclap-watchdog",
+        "arclap-watchdog.timer",
+        "caddy",
+        "caddy.service",
+        "avahi-daemon",
+        "avahi-daemon.service",
+    }
+    if payload.unit not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unit '{payload.unit}' not in allowlist",
+        )
+    audit_emit("user", "system.restart_service", {"unit": payload.unit})
+    # Fire-and-forget — the request that triggered the restart may itself
+    # be the one we're killing. Spawn a detached subprocess.
+    subprocess.Popen(
+        ["systemctl", "restart", payload.unit],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "unit": payload.unit}
+
+
+class RebootRequest(BaseModel):
+    confirm_pin: str = Field(..., min_length=4, max_length=12, pattern=r"^\d+$")
+
+
+@router.post("/reboot")
+async def reboot(
+    payload: RebootRequest,
+    request: Request,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Reboot the Pi. Requires PIN confirmation to avoid misclicks."""
+    import subprocess  # noqa: PLC0415
+
+    from arclap_station.auth import AuthManager, InvalidPin, LockedOut, PinNotSet  # noqa: PLC0415
+
+    ip = request.client.host if request.client else "unknown"
+    auth = AuthManager()
+    try:
+        auth.verify_pin(payload.confirm_pin, ip)
+    except (LockedOut, PinNotSet) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidPin as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="PIN incorrect"
+        ) from exc
+    audit_emit("user", "system.reboot", {"ip": ip})
+    subprocess.Popen(
+        ["systemctl", "reboot"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "reboot scheduled"}
+
+
+class FactoryResetRequest(BaseModel):
+    confirm_pin: str = Field(..., min_length=4, max_length=12, pattern=r"^\d+$")
+    purge_photos: bool = False
+
+
+@router.post("/factory-reset")
+async def factory_reset(
+    payload: FactoryResetRequest,
+    request: Request,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Wipe configuration and (optionally) photos. Requires PIN confirmation.
+
+    What gets cleared:
+    - /etc/arclap/auth.json (PIN)
+    - /etc/arclap/station.json (station identity → resets first_boot)
+    - destinations table
+    - schedules table
+    - audit_log table
+    - upload_queue table
+
+    What's preserved unless `purge_photos=True`:
+    - /media/sdcard/photos/* (captured photos themselves)
+    - photos DB rows
+    """
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    from arclap_station.auth import AuthManager, InvalidPin, LockedOut, PinNotSet  # noqa: PLC0415
+
+    ip = request.client.host if request.client else "unknown"
+    auth = AuthManager()
+    try:
+        auth.verify_pin(payload.confirm_pin, ip)
+    except (LockedOut, PinNotSet) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except InvalidPin as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="PIN incorrect"
+        ) from exc
+
+    audit_emit(
+        "user",
+        "system.factory_reset",
+        {"ip": ip, "purge_photos": payload.purge_photos},
+    )
+
+    from arclap_station.config import get_settings as _gs  # noqa: PLC0415
+    from arclap_station.db import get_db as _gdb  # noqa: PLC0415
+
+    s = _gs()
+    db = _gdb()
+    # Wipe destination + schedule + audit + queue tables. Keep `photos`
+    # intact unless purge_photos is set.
+    with db.tx() as conn:
+        conn.execute("DELETE FROM destinations")
+        conn.execute("DELETE FROM schedules")
+        conn.execute("DELETE FROM upload_queue")
+        conn.execute("DELETE FROM audit_log")
+        conn.execute("DELETE FROM tokens")
+        if payload.purge_photos:
+            conn.execute("DELETE FROM photos")
+    # Delete on-disk secrets and identity.
+    for p in [s.paths.etc / "auth.json", s.paths.etc / "station.json"]:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+    # Optionally wipe captured photos.
+    if payload.purge_photos and s.paths.photos.exists():
+        try:
+            shutil.rmtree(s.paths.photos, ignore_errors=True)
+            s.paths.photos.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+    # Schedule a service restart so the lifespan re-initializes a clean state.
+    subprocess.Popen(
+        ["systemctl", "restart", "arclap-station"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"ok": True, "message": "factory reset complete; service is restarting"}
 
 
 __all__ = ["router", "StationConfig"]

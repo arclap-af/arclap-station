@@ -240,8 +240,11 @@ export function SetupWizard() {
               ← Back
             </Button>
             <div style={{ display: "flex", gap: 8 }}>
-              {cur.id !== "welcome" && cur.id !== "done" && (
-                <Button onClick={() => setStepIndex((i) => Math.min(total - 1, i + 1))} disabled={submit.isPending}>
+              {cur.id !== "welcome" && cur.id !== "done" && cur.id !== "pin" && (
+                <Button
+                  onClick={() => setStepIndex((i) => Math.min(total - 1, i + 1))}
+                  disabled={submit.isPending}
+                >
                   Skip
                 </Button>
               )}

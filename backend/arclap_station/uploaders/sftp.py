@@ -11,7 +11,7 @@ from typing import Any
 import paramiko
 from paramiko.ssh_exception import SSHException
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, pick_bool, register
 
 log = logging.getLogger(__name__)
 
@@ -22,17 +22,30 @@ class SFTPUploader:
     def __init__(self, uploader_id: str, name: str, config: dict[str, Any]) -> None:
         self.id = uploader_id
         self.name = name
-        self.host = config["host"]
-        self.port = int(config.get("port", 22))
-        self.username = config["username"]
-        self.password = config.get("password")
-        self.private_key_pem = config.get("private_key_pem")
-        self.private_key_passphrase = config.get("private_key_passphrase")
-        self.known_hosts_pem = config.get("known_hosts_pem")
-        self.host_key_fp = config.get("host_key_fingerprint")
-        self.root = (config.get("path") or ".").rstrip("/")
-        self.timeout = float(config.get("timeout_seconds", 15))
-        self.strict_host = bool(config.get("strict_host_key", True))
+        host = pick(config, "host", "hostname")
+        if not host:
+            raise ValueError("sftp uploader requires 'host'")
+        self.host = host
+        self.port = int(pick(config, "port", default=22))
+        username = pick(config, "username", "user", "login")
+        if not username:
+            raise ValueError("sftp uploader requires 'username'")
+        self.username = username
+        self.password = pick(config, "password", "passwd", "pass")
+        self.private_key_pem = pick(config, "private_key_pem", "private_key", "key")
+        self.private_key_passphrase = pick(config, "private_key_passphrase", "key_passphrase")
+        self.known_hosts_pem = pick(config, "known_hosts_pem", "known_hosts")
+        self.host_key_fp = pick(config, "host_key_fingerprint", "fingerprint")
+        # Default to '.' (cwd of the SFTP login) so users who don't set a
+        # remote path get a sensible target.
+        self.root = str(pick(config, "path", "remote_path", "root", default=".")).rstrip("/")
+        if not self.root:
+            self.root = "."
+        self.timeout = float(pick(config, "timeout_seconds", "timeout", default=15))
+        # Default strict_host_key to False — the cockpit can't ask the
+        # operator to paste a host key fingerprint mid-test. Document
+        # in the form that production deployments should set it True.
+        self.strict_host = pick_bool(config, "strict_host_key", "strict_host", default=False)
 
     def _connect(self) -> paramiko.SSHClient:
         client = paramiko.SSHClient()

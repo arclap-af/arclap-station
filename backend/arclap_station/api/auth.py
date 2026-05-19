@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
-from arclap_station.api.deps import SESSION_COOKIE, get_auth, get_client_ip
+from arclap_station.api.deps import SESSION_COOKIE, get_auth, get_client_ip, require_session
 from arclap_station.audit import emit as audit_emit
 from arclap_station.auth import AuthManager, InvalidPin, LockedOut, PinNotSet
 
@@ -92,3 +92,62 @@ async def auth_status(
         pin_set=auth.is_pin_set(),
         lockout_seconds_remaining=auth.lockout_remaining(ip),
     )
+
+
+class ChangePinRequest(BaseModel):
+    current_pin: str = Field(..., min_length=4, max_length=12, pattern=r"^\d+$")
+    new_pin: str = Field(..., min_length=4, max_length=12, pattern=r"^\d+$")
+
+
+@router.post("/change-pin")
+async def change_pin(
+    payload: ChangePinRequest,
+    request: Request,
+    response: Response,
+    auth: AuthManager = Depends(get_auth),
+    sess: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Rotate the PIN.
+
+    Requires a valid session AND the current PIN as proof-of-possession.
+    On success, the session cookie is refreshed with a new token so the
+    user stays logged in.
+    """
+    ip = get_client_ip(request)
+    # Verify the current PIN (this also handles lockout).
+    try:
+        auth.verify_pin(payload.current_pin, ip)
+    except LockedOut as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"locked out; retry in {exc.seconds_remaining}s",
+        ) from exc
+    except PinNotSet as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="pin not set") from exc
+    except InvalidPin as exc:
+        audit_emit("user", "auth.change_pin_failed", {"ip": ip})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="current PIN incorrect"
+        ) from exc
+    # Reject identity rotations (no-op).
+    if payload.current_pin == payload.new_pin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="new PIN must differ from the current one",
+        )
+    auth.set_pin(payload.new_pin)
+    # Issue a fresh session so the cookie stays valid after rotation.
+    token = auth.verify_pin(payload.new_pin, ip)
+    fwd_proto = request.headers.get("x-forwarded-proto", "")
+    secure = (fwd_proto or request.url.scheme) == "https"
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        httponly=True,
+        secure=secure,
+        samesite="strict",
+        max_age=60 * 60 * 12,
+        path="/",
+    )
+    audit_emit("user", "auth.pin_changed", {"ip": ip})
+    return {"ok": True}

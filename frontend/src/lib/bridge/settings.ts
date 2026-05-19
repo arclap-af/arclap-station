@@ -183,14 +183,19 @@ export const settings = {
       return [];
     }
   },
-  async restart(_unit: string): Promise<void> {
-    // No-op for now — restart wiring not on backend yet.
-    return;
+  async restart(unit: string = "arclap-station"): Promise<void> {
+    await apiFetch("/settings/restart-service", { method: "POST", body: { unit } });
   },
-  async reboot(): Promise<void> {
-    return;
+  async reboot(confirmPin: string): Promise<void> {
+    await apiFetch("/settings/reboot", {
+      method: "POST",
+      body: { confirm_pin: confirmPin },
+    });
   },
-  async factoryReset(): Promise<void> {
-    return;
+  async factoryReset(confirmPin: string, purgePhotos = false): Promise<void> {
+    await apiFetch("/settings/factory-reset", {
+      method: "POST",
+      body: { confirm_pin: confirmPin, purge_photos: purgePhotos },
+    });
   },
 };

@@ -34,4 +34,10 @@ export const auth = {
   async logout(): Promise<void> {
     await apiFetch("/auth/logout", { method: "POST" });
   },
+  async changePin(currentPin: string, newPin: string): Promise<void> {
+    await apiFetch("/auth/change-pin", {
+      method: "POST",
+      body: { current_pin: currentPin, new_pin: newPin },
+    });
+  },
 };

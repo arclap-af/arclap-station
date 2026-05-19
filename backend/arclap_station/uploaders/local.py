@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, register
 
 
 class LocalUploader:
@@ -16,11 +16,14 @@ class LocalUploader:
     def __init__(self, uploader_id: str, name: str, config: dict[str, Any]) -> None:
         self.id = uploader_id
         self.name = name
-        root = config.get("path") or config.get("root")
+        root = pick(config, "path", "root", "directory", "dir")
         if not root:
             raise ValueError("local uploader requires 'path'")
-        self.root = Path(root).expanduser()
-        self.retention_days = int(config.get("retention_days", 0))
+        self.root = Path(str(root)).expanduser()
+        self.retention_days = int(pick(config, "retention_days", "retain_days", default=0))
+        # UI sends `when_full: "overwrite_oldest" | "stop"`. We surface it as
+        # a hint only; actual disk-pressure handling is in retention/policy.py.
+        self.when_full = str(pick(config, "when_full", default="overwrite_oldest")).lower()
 
     def _ensure(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

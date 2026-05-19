@@ -879,6 +879,49 @@ EOF
   # 9. systemd-time-wait-sync — the app refuses to start until clock is sane.
   systemctl enable systemd-time-wait-sync.service 2>/dev/null || true
 
+  # 10. polkit rule: let the arclap user restart specific services + reboot
+  #     the system without sudo. The Settings → Danger Zone actions in the
+  #     cockpit rely on this; without it `systemctl restart` from inside the
+  #     FastAPI process (running as `arclap`) silently fails.
+  install -d -m 0755 /etc/polkit-1/rules.d
+  cat > /etc/polkit-1/rules.d/50-arclap.rules <<'POLKIT'
+// Arclap Station — let the `arclap` system user manage its own services
+// and trigger reboots from the cockpit, without sudo.
+polkit.addRule(function(action, subject) {
+    var allowedUnits = [
+        "arclap-station.service",
+        "arclap-camera-watchdog.timer",
+        "arclap-camera-watchdog.service",
+        "arclap-retention.timer",
+        "arclap-retention.service",
+        "arclap-watchdog.timer",
+        "arclap-watchdog.service",
+        "arclap-usb3-disable.service",
+        "caddy.service",
+        "avahi-daemon.service",
+    ];
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        subject.user == "arclap") {
+        var unit = action.lookup("unit");
+        if (allowedUnits.indexOf(unit) >= 0) {
+            return polkit.Result.YES;
+        }
+    }
+    // Allow `arclap` to trigger reboot / power-off (Factory Reset path).
+    if ((action.id == "org.freedesktop.login1.reboot" ||
+         action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.power-off" ||
+         action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+        subject.user == "arclap") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
+POLKIT
+  chmod 0644 /etc/polkit-1/rules.d/50-arclap.rules
+  # polkit watches this directory; restart for the rule to take effect.
+  systemctl restart polkit 2>/dev/null || true
+
   ok "OS hardening applied"
 }
 

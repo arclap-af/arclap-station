@@ -11,7 +11,27 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, pick_bool, register
+
+
+def _parse_broker_url(url: str) -> tuple[str, int, bool]:
+    """Parse 'ssl://host:port' / 'mqtts://...' / 'mqtt://host' style URLs."""
+    if "://" in url:
+        scheme, rest = url.split("://", 1)
+    else:
+        scheme, rest = "mqtt", url
+    use_tls = scheme.lower() in ("mqtts", "ssl", "tls")
+    host_port = rest.rstrip("/").split("/")[0]
+    if ":" in host_port:
+        host, port_s = host_port.rsplit(":", 1)
+        try:
+            port = int(port_s)
+        except ValueError:
+            port = 8883 if use_tls else 1883
+    else:
+        host = host_port
+        port = 8883 if use_tls else 1883
+    return host, port, use_tls
 
 
 class MQTTUploader:
@@ -20,19 +40,28 @@ class MQTTUploader:
     def __init__(self, uploader_id: str, name: str, config: dict[str, Any]) -> None:
         self.id = uploader_id
         self.name = name
-        self.host = config["host"]
-        self.port = int(config.get("port", 8883))
-        self.client_id = config.get("client_id", f"arclap-{uploader_id}")
-        self.username = config.get("username")
-        self.password = config.get("password")
-        self.use_tls = bool(config.get("tls", True))
-        self.ca_pem = config.get("ca_pem")
-        self.cert_pem = config.get("cert_pem")
-        self.key_pem = config.get("key_pem")
-        self.topic_root = config.get("topic_root", "arclap/photos")
-        self.qos = int(config.get("qos", 1))
-        self.timeout = float(config.get("timeout_seconds", 10))
-        self.publish_payload = bool(config.get("publish_payload", False))
+        # Accept either {host, port, tls} or a single {broker} URL.
+        broker_url = pick(config, "broker", "broker_url", "url")
+        if broker_url:
+            host, port, url_tls = _parse_broker_url(str(broker_url))
+        else:
+            host, port, url_tls = pick(config, "host", "hostname"), int(pick(config, "port", default=8883)), True
+        if not host:
+            raise ValueError("mqtt uploader requires 'host' or 'broker' URL")
+        self.host = host
+        self.port = int(pick(config, "port", default=port))
+        self.client_id = pick(config, "client_id", "clientId", default=f"arclap-{uploader_id}")
+        self.username = pick(config, "username", "user")
+        self.password = pick(config, "password", "passwd")
+        self.use_tls = pick_bool(config, "tls", "use_tls", "ssl", default=url_tls)
+        self.ca_pem = pick(config, "ca_pem", "ca_cert", "ca")
+        self.cert_pem = pick(config, "cert_pem", "client_cert", "cert")
+        self.key_pem = pick(config, "key_pem", "client_key", "key")
+        # UI uses `topic` for the root path.
+        self.topic_root = pick(config, "topic_root", "topic", "topic_prefix", default="arclap/photos")
+        self.qos = int(pick(config, "qos", default=1))
+        self.timeout = float(pick(config, "timeout_seconds", "timeout", default=10))
+        self.publish_payload = pick_bool(config, "publish_payload", default=False)
 
     def _client(self) -> mqtt.Client:
         api_version = getattr(mqtt, "CallbackAPIVersion", None)

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, register
 
 log = logging.getLogger(__name__)
 
@@ -20,17 +20,25 @@ class S3Uploader:
 
         self.id = uploader_id
         self.name = name
-        self.bucket = config["bucket"]
-        self.prefix = config.get("prefix", "").lstrip("/")
-        self.region = config.get("region", "eu-central-1")
-        self.endpoint_url = config.get("endpoint_url")
-        self.acl = config.get("acl")
+        # Accept both UI-friendly and canonical AWS key names so the cockpit
+        # forms and curl users can both produce a working config.
+        bucket = pick(config, "bucket")
+        if not bucket:
+            raise ValueError("s3 uploader requires 'bucket'")
+        self.bucket = bucket
+        self.prefix = str(pick(config, "prefix", "path", "key_prefix", default="")).lstrip("/")
+        self.region = pick(config, "region", "aws_region", default="eu-central-1")
+        self.endpoint_url = pick(config, "endpoint_url", "endpoint", "url")
+        self.acl = pick(config, "acl")
+
+        access_key = pick(config, "access_key_id", "access_key", "aws_access_key_id")
+        secret_key = pick(config, "secret_access_key", "secret_key", "aws_secret_access_key")
 
         session_kwargs: dict[str, Any] = {}
-        if config.get("access_key_id"):
-            session_kwargs["aws_access_key_id"] = config["access_key_id"]
-        if config.get("secret_access_key"):
-            session_kwargs["aws_secret_access_key"] = config["secret_access_key"]
+        if access_key:
+            session_kwargs["aws_access_key_id"] = access_key
+        if secret_key:
+            session_kwargs["aws_secret_access_key"] = secret_key
         if self.region:
             session_kwargs["region_name"] = self.region
 

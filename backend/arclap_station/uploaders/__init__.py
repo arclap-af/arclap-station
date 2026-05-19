@@ -40,6 +40,31 @@ UploaderFactory = Callable[[str, str, dict[str, Any]], Uploader]
 REGISTRY: dict[str, UploaderFactory] = {}
 
 
+def pick(config: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    """Return the first non-empty value among the keys in `config`.
+
+    Used by uploaders to accept BOTH the operator-friendly UI key names
+    and the canonical backend ones. Example:
+        username = pick(config, "username", "user", default=None)
+    """
+    for k in keys:
+        if k in config and config[k] not in (None, ""):
+            return config[k]
+    return default
+
+
+def pick_bool(config: dict[str, Any], *keys: str, default: bool = False) -> bool:
+    """Same as pick() but coerces to bool (handles 'true'/'false' strings)."""
+    v = pick(config, *keys, default=default)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return default
+
+
 def register(type_id: str) -> Callable[[UploaderFactory], UploaderFactory]:
     def decorator(fn: UploaderFactory) -> UploaderFactory:
         REGISTRY[type_id] = fn

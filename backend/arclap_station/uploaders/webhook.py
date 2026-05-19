@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from arclap_station.uploaders import UploadError, register
+from arclap_station.uploaders import UploadError, pick, pick_bool, register
 
 
 class WebhookUploader:
@@ -20,22 +20,36 @@ class WebhookUploader:
     def __init__(self, uploader_id: str, name: str, config: dict[str, Any]) -> None:
         self.id = uploader_id
         self.name = name
-        self.url = config["url"]
-        self.method = config.get("method", "POST").upper()
-        self.auth_type = config.get("auth_type", "none")
-        self.token = config.get("token")
-        self.username = config.get("username")
-        self.password = config.get("password")
-        self.hmac_secret = config.get("hmac_secret")
-        self.hmac_header = config.get("hmac_header", "X-Arclap-Signature")
-        self.timeout = float(config.get("timeout_seconds", 30))
-        self.verify_tls = bool(config.get("verify_tls", True))
-        self.headers_extra = config.get("headers") or {}
+        url = pick(config, "url", "endpoint")
+        if not url:
+            raise ValueError("webhook uploader requires 'url'")
+        self.url = url
+        self.method = str(pick(config, "method", default="POST")).upper()
+        # `auth_header` is the UI's single field — if present, treat as a
+        # bearer-style "Authorization: <value>" without parsing.
+        auth_header = pick(config, "auth_header")
+        if auth_header:
+            self.auth_type = "raw"
+            self.raw_authorization = str(auth_header)
+        else:
+            self.auth_type = pick(config, "auth_type", "auth", default="none")
+            self.raw_authorization = None
+        self.token = pick(config, "token", "bearer", "api_key")
+        self.username = pick(config, "username", "user")
+        self.password = pick(config, "password", "passwd")
+        self.hmac_secret = pick(config, "hmac_secret", "signing_secret", "secret")
+        self.hmac_header = pick(config, "hmac_header", default="X-Arclap-Signature")
+        self.timeout = float(pick(config, "timeout_seconds", "timeout", default=30))
+        self.verify_tls = pick_bool(config, "verify_tls", "verify", default=True)
+        self.headers_extra = pick(config, "headers", "extra_headers", default={}) or {}
 
     def _headers(self, body: bytes) -> dict[str, str]:
-        headers: dict[str, str] = {"User-Agent": "arclap-station/0.1"}
+        headers: dict[str, str] = {"User-Agent": "arclap-station/0.2"}
         headers.update(self.headers_extra)
-        if self.auth_type == "bearer" and self.token:
+        # Honour the UI's "auth_header" string verbatim if set.
+        if self.raw_authorization:
+            headers["Authorization"] = self.raw_authorization
+        elif self.auth_type == "bearer" and self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         elif self.auth_type == "basic" and self.username and self.password is not None:
             blob = base64.b64encode(f"{self.username}:{self.password}".encode()).decode(
@@ -96,4 +110,12 @@ class WebhookUploader:
 
 @register("webhook")
 def _build(uploader_id: str, name: str, config: dict[str, Any]) -> WebhookUploader:
+    return WebhookUploader(uploader_id, name, config)
+
+
+@register("arc")
+def _build_arc(uploader_id: str, name: str, config: dict[str, Any]) -> WebhookUploader:
+    """`arc` is the cockpit's friendly name for Arclap Cloud. Until the
+    cloud-mediated tunnel ships, we treat it as a webhook destination —
+    the cloud just needs a URL + bearer token to receive uploads."""
     return WebhookUploader(uploader_id, name, config)

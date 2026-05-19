@@ -263,6 +263,16 @@ async def setup_acceptance_run() -> dict[str, Any]:
 
 @router.post("/finish", dependencies=[Depends(require_first_boot)])
 async def setup_finish() -> dict[str, Any]:
+    # Refuse to finish without a PIN. Without this gate, a user who clicks
+    # Skip on the PIN step can mark first_boot_completed=True and brick
+    # the station — no PIN means /api/auth/login can't succeed, and
+    # /api/setup/* is locked because first_boot is now False.
+    auth = AuthManager()
+    if not auth.is_pin_set():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cannot finish setup: PIN has not been set. Complete the PIN step first.",
+        )
     engine = get_engine()
     for sched in engine.list():
         if not sched.enabled:
