@@ -87,6 +87,19 @@ const FLAT_TO_PATH: Record<keyof CameraSettings, string> = {
   aspect: "/main/imgsettings/aspectratio",
 };
 
+// Cross-process camera-health beacon — written by backend on every
+// camera op, read by the watchdog. Surfacing it in the cockpit lets
+// the Camera page show "Camera firmware locked — replug required"
+// instead of looking unresponsive.
+export interface CameraHealth {
+  ok: boolean;
+  last_ok_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+  last_reset_at: string | null;
+  beacon_age_sec: number | null;
+}
+
 // Real camera state + actual gphoto2 choices for the chip rows.
 export interface CameraInfo {
   detected: boolean;
@@ -97,11 +110,13 @@ export interface CameraInfo {
   shutter_count: number | null;
   values: Partial<Record<keyof CameraSettings, string>>;
   choices: Partial<Record<keyof CameraSettings, string[]>>;
+  health: CameraHealth;
 }
 
 export const camera = {
   async info(): Promise<CameraInfo> {
     const raw = await apiFetch<Record<string, any>>("/camera/info");
+    const h = (raw?.health ?? {}) as Record<string, any>;
     return {
       detected: Boolean(raw?.detected),
       model: raw?.model ?? null,
@@ -111,6 +126,14 @@ export const camera = {
       shutter_count: typeof raw?.shutter_count === "number" ? raw.shutter_count : null,
       values: (raw?.values ?? {}) as Partial<Record<keyof CameraSettings, string>>,
       choices: (raw?.choices ?? {}) as Partial<Record<keyof CameraSettings, string[]>>,
+      health: {
+        ok: Boolean(h?.ok),
+        last_ok_at: h?.last_ok_at ?? null,
+        last_error: h?.last_error ?? null,
+        last_error_at: h?.last_error_at ?? null,
+        last_reset_at: h?.last_reset_at ?? null,
+        beacon_age_sec: typeof h?.beacon_age_sec === "number" ? h.beacon_age_sec : null,
+      },
     };
   },
   async settings(): Promise<CameraSettings> {

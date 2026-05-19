@@ -1,3 +1,3 @@
 """Arclap Station — on-device control plane for Raspberry Pi 5 + DSLR."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

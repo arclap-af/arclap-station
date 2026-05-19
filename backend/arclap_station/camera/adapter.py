@@ -107,7 +107,36 @@ class CameraAdapter:
 
 
 class _GPhoto2Backend:
-    """Real backend using python-gphoto2."""
+    """Real backend using python-gphoto2.
+
+    Stability defences layered in v0.5 (see CHANGELOG):
+      B  After init we disable the camera's auto-power-off and set
+         capture-target to internal RAM (eliminates card-related fails).
+      C  init() is retried up to 3 times with 1s/3s/10s backoff so a
+         transient EBUSY (e.g. kernel still tearing down a previous
+         handle) doesn't permanently break the singleton.
+      D  Before every capture we issue a cheap GET to wake the camera
+         and verify the handle is live. One retry on transient I/O error.
+      E  capture-target = SDRAM: we never touch the camera's CF/SD card,
+         so card-full / write-protect / slow-card stop manifesting as
+         capture failures.
+      I  Capture is wrapped in a watchdog `threading.Timer` that
+         force-closes the handle if the call exceeds CAPTURE_TIMEOUT.
+         Closing the handle from another thread is safe in libgphoto2;
+         calling capture() from another thread is not, so we don't.
+
+    Health beacon (F): every successful detect/capture/preview updates a
+    JSON file the watchdog reads instead of running its own gphoto2
+    probe — so two processes never fight for the USB interface.
+    """
+
+    # Total wallclock budget for a single capture before we force-close
+    # the handle. The Canon 5D MkIV finishes a JPEG capture in ~1.5s
+    # under good conditions; 45s catches any pathological hang.
+    CAPTURE_TIMEOUT_SEC = 45.0
+    # How long after a USB reset to skip self-init (let the kernel
+    # finish re-enumerating before we slam in a new PTP session).
+    POST_RESET_GRACE_SEC = 15.0
 
     def __init__(self) -> None:
         import gphoto2 as gp  # noqa: PLC0415 - imported lazily on real Pi only
@@ -115,30 +144,130 @@ class _GPhoto2Backend:
         self._gp = gp
         self._cam: Any | None = None
         self._info: CameraInfo | None = None
+        self._configured: bool = False
+
+    # ---- handle lifecycle (B, C) ----------------------------------------
 
     def _ensure(self) -> Any:
-        if self._cam is None:
-            cam = self._gp.Camera()
-            cam.init()
-            self._cam = cam
-        return self._cam
+        """Return a live Camera handle, creating one if needed.
+
+        Retries init up to 3 times on transient errors so a brief EBUSY
+        (the kernel re-enumerating after a USB reset, or another process
+        holding the bus for a moment) doesn't permanently fail us.
+        """
+        import time as _t  # noqa: PLC0415
+
+        # G: respect post-reset grace.
+        if self._reset_grace_remaining() > 0:
+            raise self._gp.GPhoto2Error(-1, "post-reset grace period")
+
+        if self._cam is not None:
+            return self._cam
+
+        backoff = [1.0, 3.0, 10.0]
+        last_exc: Exception | None = None
+        for attempt, wait in enumerate(backoff, start=1):
+            try:
+                cam = self._gp.Camera()
+                cam.init()
+                self._cam = cam
+                self._configured = False
+                self._after_init(cam)
+                return cam
+            except self._gp.GPhoto2Error as exc:
+                last_exc = exc
+                log.info(
+                    "camera init attempt %d/%d failed: %s — retrying in %.1fs",
+                    attempt,
+                    len(backoff),
+                    exc,
+                    wait,
+                )
+                if attempt < len(backoff):
+                    _t.sleep(wait)
+        # All attempts exhausted.
+        assert last_exc is not None
+        raise last_exc
+
+    def _after_init(self, cam: Any) -> None:
+        """Apply our per-session camera settings — fail-soft.
+
+        These calls are best-effort: not every body exposes every path,
+        and a failure here must NOT prevent capture. We log + continue.
+        """
+        if self._configured:
+            return
+        # B: disable camera auto-power-off so PTP idle gaps don't put
+        # the body into deep sleep. Path differs by body / firmware —
+        # try the common ones.
+        for path in (
+            "/main/settings/autopoweroff",
+            "/main/settings/sleeptimer",
+            "/main/settings/datetimeutc",  # ensures we have config write access
+        ):
+            try:
+                widget = cam.get_single_config(path)
+                if "autopoweroff" in path or "sleeptimer" in path:
+                    widget.set_value("0")
+                    cam.set_single_config(path, widget)
+                    log.info("camera auto-power-off disabled (%s)", path)
+                    break
+            except self._gp.GPhoto2Error:
+                continue
+            except Exception as exc:  # noqa: BLE001
+                log.debug("set %s failed: %s", path, exc)
+        # E: write captures to camera RAM, not the SD/CF card. We
+        # pull the file out of RAM right after capture, so this
+        # eliminates card-full / card-protected / slow-card failures.
+        for path, value in (
+            ("/main/settings/capturetarget", "0"),
+            ("/main/settings/capturetarget", "Internal RAM"),
+        ):
+            try:
+                widget = cam.get_single_config(path)
+                widget.set_value(value)
+                cam.set_single_config(path, widget)
+                log.info("capture target set to internal RAM (%s=%s)", path, value)
+                break
+            except self._gp.GPhoto2Error:
+                continue
+            except Exception as exc:  # noqa: BLE001
+                log.debug("capture-target set failed: %s", exc)
+        self._configured = True
+
+    def _drop_handle(self) -> None:
+        if self._cam is not None:
+            try:
+                self._cam.exit()
+            except Exception:  # noqa: BLE001 - libgphoto2 is fussy
+                pass
+        self._cam = None
+        self._configured = False
+
+    # ---- post-reset grace (G) -------------------------------------------
+
+    def _reset_grace_remaining(self) -> float:
+        """Seconds left in the post-USB-reset grace window, or 0.0."""
+        try:
+            from arclap_station.camera.health import read_last_reset_age  # noqa: PLC0415
+
+            age = read_last_reset_age()
+        except Exception:  # noqa: BLE001
+            return 0.0
+        if age is None or age >= self.POST_RESET_GRACE_SEC:
+            return 0.0
+        return self.POST_RESET_GRACE_SEC - age
+
+    # ---- probes ----------------------------------------------------------
 
     def detect(self) -> CameraInfo:
         try:
             cam = self._ensure()
         except self._gp.GPhoto2Error as exc:
-            # Stale handle — clear and try once more on a fresh init.
-            if self._cam is not None:
-                try:
-                    self._cam.exit()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._cam = None
-            try:
-                cam = self._ensure()
-            except self._gp.GPhoto2Error as exc2:
-                log.info("no camera detected: %s / %s", exc, exc2)
-                return CameraInfo(detected=False)
+            log.info("no camera detected: %s", exc)
+            self._drop_handle()
+            self._beacon_failure(str(exc))
+            return CameraInfo(detected=False)
 
         try:
             summary = str(cam.get_summary())
@@ -155,6 +284,7 @@ class _GPhoto2Backend:
             summary=summary[:2048] if summary else None,
         )
         self._info = info
+        self._beacon_ok(info.model)
         return info
 
     def get_config(self, path: str) -> Any:
@@ -173,57 +303,115 @@ class _GPhoto2Backend:
         cam = self._ensure()
         return widget_tree_to_dict(cam.get_config())
 
-    def capture(self, dest_dir: Path) -> Path:
-        gp = self._gp
+    # ---- capture (D, E, I) ----------------------------------------------
+
+    def _wake_probe(self, cam: Any) -> None:
+        """Cheap config GET to wake the camera before capture (D).
+
+        On Canon, reading battery level forces a PTP round-trip without
+        opening a new operation. If the camera is in standby, this is
+        what brings it back to life. If it errors, we surface a fast
+        failure rather than waiting for the slower capture to time out.
+        """
         try:
-            cam = self._ensure()
-            file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
-        except gp.GPhoto2Error as exc:
-            # Stale handle (camera disconnected/reconnected since last init)
-            # → drop it and try once more on a fresh handle. After that
-            # surface the error.
-            log.info("camera capture failed (%s); reinitialising and retrying", exc)
+            _safe_config(cam, self._gp, "/main/status/batterylevel")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def capture(self, dest_dir: Path) -> Path:
+        import threading as _th  # noqa: PLC0415
+
+        gp = self._gp
+        # I: arm a watchdog timer that force-closes the handle if the
+        # capture call doesn't return within CAPTURE_TIMEOUT_SEC.
+        timed_out = {"flag": False}
+
+        def _kill() -> None:
+            timed_out["flag"] = True
+            log.warning(
+                "capture exceeded %.0fs — force-closing handle",
+                self.CAPTURE_TIMEOUT_SEC,
+            )
             try:
                 if self._cam is not None:
                     self._cam.exit()
             except Exception:  # noqa: BLE001
                 pass
-            self._cam = None
-            cam = self._ensure()
-            file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
-        cam_file = cam.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
-        # Filename-collision guard: the camera's internal counter resets
-        # across power cycles, so capt0000.jpg can recur. Suffix with a
-        # nanosecond stamp when the target already exists locally.
-        target = dest_dir / file_path.name
-        if target.exists():
-            import time as _t  # noqa: PLC0415
 
-            stem, dot, ext = file_path.name.rpartition(".")
-            ns = _t.time_ns()
-            target = dest_dir / (
-                f"{stem or file_path.name}-{ns}{('.' + ext) if dot else ''}"
-            )
-        cam_file.save(str(target))
+        timer = _th.Timer(self.CAPTURE_TIMEOUT_SEC, _kill)
+        timer.daemon = True
+        timer.start()
         try:
-            cam.file_delete(file_path.folder, file_path.name)
-        except gp.GPhoto2Error:
-            pass
-        return Path(str(target))
+            try:
+                cam = self._ensure()
+                self._wake_probe(cam)
+                file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+            except gp.GPhoto2Error as exc:
+                log.info("camera capture failed (%s); reinitialising and retrying", exc)
+                self._drop_handle()
+                cam = self._ensure()
+                self._wake_probe(cam)
+                file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+
+            if timed_out["flag"]:
+                raise gp.GPhoto2Error(-1, "capture timed out, handle force-closed")
+
+            cam_file = cam.file_get(
+                file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL
+            )
+            target = dest_dir / file_path.name
+            if target.exists():
+                import time as _t  # noqa: PLC0415
+
+                stem, dot, ext = file_path.name.rpartition(".")
+                ns = _t.time_ns()
+                target = dest_dir / (
+                    f"{stem or file_path.name}-{ns}{('.' + ext) if dot else ''}"
+                )
+            cam_file.save(str(target))
+            try:
+                cam.file_delete(file_path.folder, file_path.name)
+            except gp.GPhoto2Error:
+                pass
+            self._beacon_ok(self._info.model if self._info else None)
+            return Path(str(target))
+        except Exception as exc:
+            self._beacon_failure(str(exc))
+            raise
+        finally:
+            timer.cancel()
 
     def capture_preview(self) -> bytes:
-        cam = self._ensure()
-        cam_file = cam.capture_preview()
-        data = cam_file.get_data_and_size()
-        return bytes(data)
+        try:
+            cam = self._ensure()
+            cam_file = cam.capture_preview()
+            data = cam_file.get_data_and_size()
+            self._beacon_ok(self._info.model if self._info else None)
+            return bytes(data)
+        except Exception as exc:
+            self._beacon_failure(str(exc))
+            raise
 
     def close(self) -> None:
-        if self._cam is not None:
-            try:
-                self._cam.exit()
-            except Exception:  # noqa: BLE001 - libgphoto2 is fussy
-                pass
-            self._cam = None
+        self._drop_handle()
+
+    # ---- health beacon (F) ----------------------------------------------
+
+    def _beacon_ok(self, model: str | None) -> None:
+        try:
+            from arclap_station.camera.health import write_ok  # noqa: PLC0415
+
+            write_ok(model)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _beacon_failure(self, err: str) -> None:
+        try:
+            from arclap_station.camera.health import write_failure  # noqa: PLC0415
+
+            write_failure(err)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _safe_config(cam: Any, gp: Any, path: str) -> Any:

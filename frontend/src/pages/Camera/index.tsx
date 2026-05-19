@@ -76,7 +76,16 @@ export function CameraPage() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
               <h1 className="as-h1" style={{ margin: 0 }}>Camera</h1>
-              <Pill tone="ok">PTP session · live</Pill>
+              {(() => {
+                // Real PTP/health state — no more hardcoded "live".
+                if (!info) return <Pill tone="gray">probing…</Pill>;
+                if (!info.detected) return <Pill tone="bad">no camera</Pill>;
+                if (info.health.last_error && !info.health.ok) {
+                  return <Pill tone="warn">PTP error · {info.health.last_error.slice(0, 40)}</Pill>;
+                }
+                if (info.health.ok) return <Pill tone="ok">PTP session · live</Pill>;
+                return <Pill tone="warn">connecting…</Pill>;
+              })()}
             </div>
             <div className="as-h1-sub" style={{ marginBottom: 0 }}>
               gphoto2 control · viewfinder · {exp.mode} · {exp.shutter}s · {exp.aperture} · ISO {exp.iso}

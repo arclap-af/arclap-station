@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arclap-station"
-version = "0.4.0"
+version = "0.5.0"
 description = "Arclap Station — on-device control plane for Raspberry Pi 5 tethered to a DSLR."
 readme = "README.md"
 license = { text = "Apache-2.0" }

@@ -12,29 +12,45 @@ ACTION!="add|change", GOTO="arclap_end"
 SUBSYSTEM!="usb", GOTO="arclap_end"
 
 # ---- Vendor catch-alls ----
+# Each vendor row sets:
+#   - permissions  (plugdev:0660 + uaccess for desktop sessions)
+#   - power/control="on"  — DISABLE USB autosuspend. Pi 5's xHCI driver
+#     would otherwise suspend the camera endpoint after ~2s of idle
+#     (usbcore.autosuspend=2 is the kernel default), and the first PTP
+#     call after wake returns -7 / -105 I/O Error. Keeping the device
+#     always-powered is essential for tethered DSLR stability.
+
 # Canon (Cameras, includes EOS R/RP/5D/6D/Rebel).
-ATTR{idVendor}=="04a9", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="04a9", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Nikon (D/Z series).
-ATTR{idVendor}=="04b0", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="04b0", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Sony (Alpha series, also Sony Computer Entertainment USA so be specific).
-ATTR{idVendor}=="054c", ATTR{idProduct}=="0?*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="054c", ATTR{idProduct}=="0?*", MODE="0660", GROUP="plugdev", \
+    TAG+="uaccess", ATTR{power/control}="on"
 
 # Fujifilm.
-ATTR{idVendor}=="04cb", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="04cb", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Olympus / OM Digital Solutions.
-ATTR{idVendor}=="07b4", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="07b4", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Panasonic / Lumix.
-ATTR{idVendor}=="04da", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="04da", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Pentax / Ricoh Imaging.
-ATTR{idVendor}=="25fb", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="25fb", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # Leica.
-ATTR{idVendor}=="1a98", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="1a98", MODE="0660", GROUP="plugdev", TAG+="uaccess", \
+    ATTR{power/control}="on"
 
 # ---- Generic PTP class ----
 # Devices that advertise the PTP/MTP USB interface class (06/01/01 = Imaging/Still capture/PTP).

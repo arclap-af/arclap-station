@@ -186,7 +186,36 @@ async def camera_info(_: dict[str, Any] = Depends(require_session)) -> dict[str,
             "metering": choices_of("/main/capturesettings/meteringmode"),
             "picture_style": choices_of("/main/imgsettings/picturestyle"),
         },
+        # v0.5: cross-process camera health beacon. Lets the cockpit
+        # show "replug required" when the watchdog has given up and
+        # surfaced a firmware lockup.
+        "health": _camera_health_summary(),
     }
+
+
+def _camera_health_summary() -> dict[str, Any]:
+    """Summary of the cross-process health beacon for the cockpit."""
+    try:
+        from arclap_station.camera import health as _h  # noqa: PLC0415
+
+        state = _h.read_state()
+        return {
+            "ok": bool(state.get("ok", False)),
+            "last_ok_at": state.get("last_ok_at"),
+            "last_error": state.get("last_error"),
+            "last_error_at": state.get("last_error_at"),
+            "last_reset_at": state.get("last_reset_at"),
+            "beacon_age_sec": _h.beacon_age_sec(),
+        }
+    except Exception:  # noqa: BLE001
+        return {
+            "ok": False,
+            "last_ok_at": None,
+            "last_error": None,
+            "last_error_at": None,
+            "last_reset_at": None,
+            "beacon_age_sec": None,
+        }
 
 
 @router.websocket("/preview-ws")

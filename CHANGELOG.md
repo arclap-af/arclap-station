@@ -1,5 +1,87 @@
 # Arclap Station — Changelog
 
+## v0.5.0 — 2026-05-19 (camera stability hardening)
+
+Nine layered defences against the tethered-DSLR failure modes that
+caused the early "camera disappeared, watchdog reset 3×, then dead"
+sequence. Same wire format, same UI; the gains are all under the
+hood. Verified live on arclap-st-90107cb4.
+
+### A — USB autosuspend off for camera vendors
+`udev/50-arclap-camera.rules` now sets `ATTR{power/control}="on"` on
+Canon / Nikon / Sony / Fuji / Olympus / Panasonic / Pentax / Leica
+vendor IDs. Previously `usbcore.autosuspend=2` would suspend the camera
+endpoint after ~2s idle and the first PTP call after wake returned
+`-7 / -105 I/O Error`. This is the single biggest stability win.
+
+### B — Camera auto-power-off disabled via PTP
+After init, the adapter calls `set_config /main/settings/autopoweroff
+= 0` (with a `sleeptimer` fallback for bodies that name the path
+differently). Cameras can no longer drop into deep sleep mid-deployment
+and require a wake-up dance on each capture.
+
+### C — Init retry with backoff
+`_ensure()` now retries `Camera().init()` up to 3 times at 1 s / 3 s /
+10 s. Survives transient `EBUSY` (kernel tearing down a previous handle,
+udev re-running rules, etc.) instead of permanently failing.
+
+### D — Pre-capture wake probe
+Every capture issues a cheap `get_config /main/status/batterylevel`
+first. If it errors, the adapter drops the handle and re-inits before
+attempting the capture itself — surfaces a fast clean failure rather
+than waiting for `capture()` to time out.
+
+### E — Capture target = internal RAM
+After init, sets `/main/settings/capturetarget = 0` (Internal RAM).
+Captures are pulled directly from the camera's buffer; the CF/SD card
+is never touched. Eliminates card-full, card-write-protected, and
+slow-card capture failures entirely.
+
+### F — Watchdog uses backend health beacon
+New `backend/arclap_station/camera/health.py` writes
+`/var/lib/arclap/camera_health.json` on every detect / capture / preview
+with `{ok, last_ok_at, last_error, last_error_at, model, last_reset_at}`.
+The camera-watchdog reads this file FIRST: if the beacon is fresh
+(<3 min) and `ok`, it returns immediately. Only when the beacon is
+stale OR shows a recent error does the watchdog run its own
+`gphoto2 --auto-detect`. Two processes no longer fight for the USB
+interface.
+
+### G — 15s grace after USB reset
+After authorize 0→1, the watchdog writes `last_reset_at` into the
+beacon. The adapter's `_ensure()` reads that timestamp and refuses to
+open a fresh PTP session for 15 s, letting the kernel finish
+re-enumerating cleanly.
+
+### H — Firmware-lockup detection
+If the failure threshold is hit AND the maximum reset budget is
+exhausted AND the USB device is still enumerated, the watchdog now
+emits a `camera.firmware_locked` audit event and returns exit code 4
+(new) instead of looping more resets. The cockpit Camera page
+surfaces this via the new `info.health` payload so an operator knows
+to replug the body.
+
+### I — Capture wallclock timeout (in-thread, 45 s)
+A `threading.Timer` arms a force-close callback on the camera handle.
+If the in-thread `capture()` exceeds `CAPTURE_TIMEOUT_SEC = 45`, the
+timer thread calls `cam.exit()` — which is safe to call from another
+thread — and the capturing thread surfaces a bounded error. The
+previous `ThreadPoolExecutor`-based approach was reverted in v0.2.3
+because libgphoto2's `Camera()` handle is bound to the thread that
+called `.init()`; this approach respects that affinity.
+
+### Cockpit
+- New `health` field on `/api/camera/info` plumbed into the Camera page.
+  The "PTP session · live" pill now reflects real state: `live` when
+  beacon ok, `PTP error · <last_error>` when not, `no camera` when
+  unplugged, `connecting…` while spinning up.
+
+### Verified live
+- v0.5.0 wheel installed, all 55 backend tests pass.
+- Camera health beacon writes on detect; cockpit reads it correctly.
+- Watchdog returns 0 when camera physically absent (no false resets).
+- Frontend bundle hash `index-D_bvdCWd.js` deployed via Caddy.
+
 ## v0.4.0 — 2026-05-19 (production-ready, all real data)
 
 The "no demo data anywhere, customer-ready" cut. Every dashboard widget

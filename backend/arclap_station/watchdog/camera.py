@@ -1,13 +1,26 @@
 """Camera USB watchdog.
 
-Periodically probes whether the connected DSLR is healthy at the libgphoto2
-level. After N consecutive failures, performs a sysfs USB reauthorize on
-the camera's bus device to recover a stuck PTP session. Bounded retry
-count prevents reset loops; an audit event fires when we give up.
+Strategy (v0.5):
 
-The probe is deliberately lightweight: `gphoto2 --auto-detect` enumerates
-USB-connected cameras without opening a PTP session, so it does not
-interfere with the running backend's session.
+  1. PREFER the backend's health beacon. The arclap-station service
+     updates /var/lib/arclap/camera_health.json on every camera op. If
+     it's fresh (< 3 min) and the last op succeeded, the camera is
+     healthy and we exit immediately — no USB poking, no second
+     gphoto2 process fighting the backend for the interface.
+
+  2. If the beacon is stale or shows a recent failure, fall through to
+     the lightweight USB sysfs check (is a DSLR enumerated?). Only if
+     it's enumerated but stuck do we consider a reset.
+
+  3. After FAIL_THRESHOLD strikes we attempt a USB authorize toggle.
+     We then write the reset timestamp into the same beacon so the
+     adapter respects a 15s grace before opening a fresh PTP session.
+
+  4. After MAX_RESETS_IN_A_ROW failed resets while the device is
+     STILL enumerated, treat this as a firmware lockup (the body has
+     gone unresponsive in a way USB-level recovery cannot fix). Emit
+     `camera.firmware_locked` so the cockpit can surface "replug
+     required" instead of resetting in circles.
 
 CLI: `arclap-station camera-watchdog`
 Exit codes:
@@ -15,6 +28,7 @@ Exit codes:
     1 = unhealthy but fail-count still below threshold
     2 = unhealthy, just performed USB reset
     3 = unhealthy, exhausted reset budget — escalated via audit log
+    4 = firmware lockup detected — operator must replug
 """
 
 from __future__ import annotations
@@ -29,6 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from arclap_station.audit import emit as audit_emit
+from arclap_station.camera import health as camera_health
 from arclap_station.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -153,6 +168,30 @@ class CameraWatchdog:
         state = self._load_state()
         now_iso = datetime.now(UTC).isoformat()
 
+        # G: respect the post-reset grace window — the backend is
+        # waiting for the kernel to finish re-enumerating, so the camera
+        # is "expected unhealthy" right now. Don't pile on.
+        last_reset_age = camera_health.read_last_reset_age()
+        if last_reset_age is not None and last_reset_age < 15.0:
+            log.info("inside post-reset grace (%.1fs) — skipping probe", last_reset_age)
+            return 0
+
+        # F: trust the backend's health beacon if it's fresh and ok —
+        # no need to run our own gphoto2 process and risk a USB race.
+        if camera_health.is_fresh_and_ok():
+            if state["fail_count"] > 0:
+                _safe_audit(
+                    "camera.recovered",
+                    {
+                        "after_fails": state["fail_count"],
+                        "resets": state["reset_count"],
+                        "source": "beacon",
+                    },
+                )
+            state.update(fail_count=0, reset_count=0, last_ok_at=now_iso)
+            self._save_state(state)
+            return 0
+
         if not self._camera_enumerated():
             # No DSLR plugged in. Reset counters so a future re-plug starts clean.
             if state["fail_count"] > 0 or state["reset_count"] > 0:
@@ -161,6 +200,8 @@ class CameraWatchdog:
             self._save_state(state)
             return 0
 
+        # Beacon stale-or-failure AND device still enumerated → run our
+        # own enumerate-only check as a last resort.
         if self._gphoto_responsive():
             if state["fail_count"] > 0:
                 _safe_audit(
@@ -168,6 +209,7 @@ class CameraWatchdog:
                     {
                         "after_fails": state["fail_count"],
                         "resets": state["reset_count"],
+                        "source": "gphoto2_probe",
                     },
                 )
             state.update(fail_count=0, reset_count=0, last_ok_at=now_iso)
@@ -186,7 +228,22 @@ class CameraWatchdog:
         if state["fail_count"] < FAIL_THRESHOLD:
             return 1
 
+        # H: firmware-lockup detection. If we've already reset to the
+        # max AND the device is still enumerated AND still unresponsive,
+        # the camera firmware (not the USB stack) is the problem. More
+        # resets won't help. Surface the alert and exit so an operator
+        # can replug.
         if state["reset_count"] >= MAX_RESETS_IN_A_ROW:
+            if self._camera_enumerated():
+                _safe_audit(
+                    "camera.firmware_locked",
+                    {
+                        "fail_count": state["fail_count"],
+                        "resets": state["reset_count"],
+                        "needs": "physical_replug",
+                    },
+                )
+                return 4
             _safe_audit(
                 "camera.watchdog_giving_up",
                 {
@@ -203,6 +260,12 @@ class CameraWatchdog:
             last_reset_at=now_iso,
         )
         self._save_state(state)
+        # G: tell the adapter to keep its hands off for 15s while the
+        # kernel finishes re-enumerating.
+        try:
+            camera_health.write_reset()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("camera_health.write_reset failed: %s", exc)
         _safe_audit(
             "camera.watchdog_reset",
             {"ok": ok, "devices": touched, "reset_count": state["reset_count"]},
