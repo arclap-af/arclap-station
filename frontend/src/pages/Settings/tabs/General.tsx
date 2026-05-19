@@ -65,6 +65,71 @@ export function General() {
           <TextInput className="mono" value={draft.ntp_servers} onChange={(e) => setDraft({ ...draft, ntp_servers: e.target.value })} />
         </FormField>
       </div>
+      <div className="as-card">
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Photo & project (v0.8)</div>
+        <FormField label="Burn watermark into JPEGs" hint="Bottom-right: serial · site · UTC timestamp.">
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={draft.watermark}
+              onChange={(e) => setDraft({ ...draft, watermark: e.target.checked })}
+            />
+            <span>Enable watermark</span>
+          </label>
+        </FormField>
+        <FormField
+          label="Dedup threshold (Hamming distance)"
+          hint="0 = exact-match only, 4–6 = visually identical, blank = off. Drops near-identical frames in a 10-min window."
+        >
+          <TextInput
+            className="mono"
+            type="number"
+            placeholder="off"
+            value={draft.dedup_threshold ?? ""}
+            onChange={(e) => setDraft({
+              ...draft,
+              dedup_threshold: e.target.value === "" ? null : Number(e.target.value),
+            })}
+          />
+        </FormField>
+        <FormField label="Upload rate cap (kbps)" hint="Blank = unlimited. Prevents saturating site Wi-Fi during work hours.">
+          <TextInput
+            className="mono"
+            type="number"
+            placeholder="unlimited"
+            value={draft.bandwidth_kbps ?? ""}
+            onChange={(e) => setDraft({
+              ...draft,
+              bandwidth_kbps: e.target.value === "" ? null : Number(e.target.value),
+            })}
+          />
+        </FormField>
+        <FormField label="Project start (ISO date)" hint="Informational; surfaces in audit + cockpit.">
+          <TextInput
+            className="mono"
+            placeholder="2026-04-01"
+            value={draft.project_starts_at ?? ""}
+            onChange={(e) => setDraft({
+              ...draft,
+              project_starts_at: e.target.value || null,
+            })}
+          />
+        </FormField>
+        <FormField label="Project end (ISO date)" hint="Photos auto-purge after this date (future feature).">
+          <TextInput
+            className="mono"
+            placeholder="2027-12-31"
+            value={draft.project_ends_at ?? ""}
+            onChange={(e) => setDraft({
+              ...draft,
+              project_ends_at: e.target.value || null,
+            })}
+          />
+        </FormField>
+        <Button variant="primary" onClick={() => save.mutate(draft)} disabled={save.isPending}>
+          {save.isPending ? "Saving…" : "Save photo + project"}
+        </Button>
+      </div>
     </div>
   );
 }

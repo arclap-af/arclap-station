@@ -28,6 +28,7 @@ class StationConfig:
     project_starts_at: str | None = None # ISO8601, informational
     project_ends_at: str | None = None   # ISO8601, photos auto-purge N days after
     bandwidth_kbps: int | None = None    # per-station upload rate cap (None = unlimited)
+    dedup_threshold: int | None = None   # 0–10 Hamming dist; None = dedup off
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

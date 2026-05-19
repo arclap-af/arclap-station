@@ -29,6 +29,13 @@ class GeneralUpdateRequest(BaseModel):
     timezone: str | None = None
     lat: float | None = None
     lon: float | None = None
+    # v0.8 fields — match StationConfig dataclass.
+    site: str | None = None
+    watermark: bool | None = None
+    dedup_threshold: int | None = None
+    bandwidth_kbps: int | None = None
+    project_starts_at: str | None = None
+    project_ends_at: str | None = None
 
 
 @router.get("/general")

@@ -15,6 +15,12 @@ export interface GeneralSettings {
   date_format: string;
   language: string;
   ntp_servers: string;
+  // v0.8: photo asset value + lifecycle + bandwidth controls
+  watermark: boolean;
+  dedup_threshold: number | null;
+  bandwidth_kbps: number | null;
+  project_starts_at: string | null;
+  project_ends_at: string | null;
 }
 
 export interface NetworkInfo {
@@ -72,6 +78,11 @@ export const settings = {
       date_format: "YYYY-MM-DD",
       language: "en",
       ntp_servers: "time.cloudflare.com",
+      watermark: Boolean(raw.watermark),
+      dedup_threshold: typeof raw.dedup_threshold === "number" ? raw.dedup_threshold : null,
+      bandwidth_kbps: typeof raw.bandwidth_kbps === "number" ? raw.bandwidth_kbps : null,
+      project_starts_at: typeof raw.project_starts_at === "string" ? raw.project_starts_at : null,
+      project_ends_at: typeof raw.project_ends_at === "string" ? raw.project_ends_at : null,
     };
   },
   async saveGeneral(patch: Partial<GeneralSettings>): Promise<GeneralSettings> {
@@ -79,6 +90,12 @@ export const settings = {
     const body: Record<string, unknown> = {};
     if (patch.station_name !== undefined) body.name = patch.station_name;
     if (patch.timezone !== undefined) body.timezone = patch.timezone;
+    if (patch.site !== undefined) body.site = patch.site;
+    if (patch.watermark !== undefined) body.watermark = patch.watermark;
+    if (patch.dedup_threshold !== undefined) body.dedup_threshold = patch.dedup_threshold;
+    if (patch.bandwidth_kbps !== undefined) body.bandwidth_kbps = patch.bandwidth_kbps;
+    if (patch.project_starts_at !== undefined) body.project_starts_at = patch.project_starts_at;
+    if (patch.project_ends_at !== undefined) body.project_ends_at = patch.project_ends_at;
     if (patch.gps !== undefined) {
       const [lat, lon] = patch.gps.split(",").map((s) => Number(s.trim()));
       if (Number.isFinite(lat) && Number.isFinite(lon)) {

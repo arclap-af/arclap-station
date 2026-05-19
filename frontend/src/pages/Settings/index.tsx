@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from "react-router-dom";
 
+import { Diagnostics } from "./tabs/Diagnostics";
 import { General } from "./tabs/General";
 import { Network } from "./tabs/Network";
 import { Security } from "./tabs/Security";
@@ -13,6 +14,7 @@ const TABS = [
   { id: "security", label: "Security", Component: Security },
   { id: "storage", label: "Storage", Component: Storage },
   { id: "system", label: "System", Component: System },
+  { id: "diagnostics", label: "Diagnostics", Component: Diagnostics },
   { id: "logs", label: "Logs", Component: Logs },
 ] as const;
 
