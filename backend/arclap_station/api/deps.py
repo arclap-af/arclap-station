@@ -62,17 +62,36 @@ async def require_ws_session(ws: Any) -> dict[str, Any] | None:
     Depends() doesn't work with WebSocket pre-accept reliably, so this
     is called manually from each handler — keep it small and explicit.
     """
-    cookie_header = ws.headers.get("cookie", "") if ws.headers else ""
+    # Starlette parses cookies for us — much more reliable than splitting
+    # the cookie header by hand (which mis-handled empty cookies and any
+    # cookie containing '=' in its value).
     token: str | None = None
-    for part in cookie_header.split(";"):
-        part = part.strip()
-        if part.startswith(SESSION_COOKIE + "="):
-            token = part[len(SESSION_COOKIE) + 1 :]
-            break
-    # Also accept ?session=… on the query string for environments where the
-    # cookie can't be set (e.g. Native apps proxying via OAuth flow).
-    if token is None and "session" in ws.query_params:
-        token = ws.query_params.get("session")
+    try:
+        cookies = ws.cookies  # dict-like
+    except Exception:  # noqa: BLE001
+        cookies = {}
+    if cookies:
+        token = cookies.get(SESSION_COOKIE)
+    # Fallback: parse the Cookie header ourselves for runtimes that don't
+    # populate .cookies (some test clients).
+    if not token:
+        cookie_header = ""
+        try:
+            cookie_header = ws.headers.get("cookie", "") or ""
+        except Exception:  # noqa: BLE001
+            pass
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith(SESSION_COOKIE + "="):
+                token = part[len(SESSION_COOKIE) + 1 :]
+                break
+    # Also accept ?session=… on the query string (proxied apps that can't
+    # set cookies cross-origin).
+    if not token:
+        try:
+            token = ws.query_params.get("session")
+        except Exception:  # noqa: BLE001
+            token = None
     if not token:
         return None
     auth = AuthManager()
