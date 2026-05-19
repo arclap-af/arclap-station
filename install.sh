@@ -509,9 +509,9 @@ install_frontend() {
 install_udev() {
   step 8 "Installing udev rules"
 
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  local rule_src="${script_dir}/udev/50-arclap-camera.rules"
+  local assets
+  assets="$(arclap_assets_dir)"
+  local rule_src="${assets}/udev/50-arclap-camera.rules"
   local rule_dst="/etc/udev/rules.d/50-arclap-camera.rules"
 
   if [[ -f "${rule_src}" ]]; then
@@ -558,12 +558,12 @@ RULE
 install_systemd() {
   step 9 "Installing systemd units"
 
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  local src="${script_dir}/systemd"
+  local assets src
+  assets="$(arclap_assets_dir)"
+  src="${assets}/systemd"
 
   if [[ ! -d "${src}" ]]; then
-    die "Cannot find systemd/ alongside install.sh. Re-clone the repo or download the release tarball."
+    die "Asset tree at ${assets} has no systemd/ directory — repo layout changed?"
   fi
 
   install -m 0644 "${src}/arclap-station.service"  /etc/systemd/system/arclap-station.service
@@ -582,14 +582,13 @@ install_systemd() {
 install_caddy() {
   step 10 "Configuring Caddy reverse proxy"
 
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  local serial
+  local assets serial tmpl
+  assets="$(arclap_assets_dir)"
   serial="$(short_serial)"
-  local tmpl="${script_dir}/caddy/Caddyfile.template"
+  tmpl="${assets}/caddy/Caddyfile.template"
 
   if [[ ! -f "${tmpl}" ]]; then
-    die "Missing caddy/Caddyfile.template alongside install.sh"
+    die "Asset tree at ${assets} has no caddy/Caddyfile.template"
   fi
 
   sed -e "s|\${SERIAL}|${serial}|g" "${tmpl}" > /etc/caddy/Caddyfile
@@ -604,14 +603,13 @@ install_caddy() {
 install_avahi() {
   step 11 "Publishing Avahi/mDNS service record"
 
-  local script_dir
-  script_dir="$(cd "$(dirname "$0")" && pwd)"
-  local serial
+  local assets serial src
+  assets="$(arclap_assets_dir)"
   serial="$(short_serial)"
-  local src="${script_dir}/avahi/arclap-station.service"
+  src="${assets}/avahi/arclap-station.service"
 
   if [[ ! -f "${src}" ]]; then
-    die "Missing avahi/arclap-station.service alongside install.sh"
+    die "Asset tree at ${assets} has no avahi/arclap-station.service"
   fi
 
   install -m 0644 "${src}" /etc/avahi/services/arclap-station.service
@@ -689,10 +687,24 @@ print_banner() {
 install_self() {
   step 14 "Wiring install.sh into /usr/local/sbin for uninstall/update"
 
-  # Copy this very script to a stable location so `sudo arclap-station uninstall`
-  # / `update` (which call back into install.sh) work after the wheel rotates.
-  install -m 0755 "$0" /usr/local/sbin/arclap-station-installer
-  ok "Installer self-copied to /usr/local/sbin/arclap-station-installer"
+  # Copy install.sh to a stable location so `sudo arclap-station-installer
+  # uninstall` / `update` work after the wheel rotates. When the script
+  # was streamed via `curl | sudo bash`, $0 is just `bash` — so we prefer
+  # the install.sh inside the asset tree (cloned by fetch_release()) and
+  # only fall back to $0 if it's a real file.
+  local assets src=""
+  assets="$(arclap_assets_dir)"
+  if [[ -f "${assets}/install.sh" ]]; then
+    src="${assets}/install.sh"
+  elif [[ -f "$0" ]]; then
+    src="$0"
+  fi
+  if [[ -z "${src}" ]]; then
+    warn "Could not locate install.sh source — skipping self-copy. update/uninstall sub-commands won't work until you re-run from a clone."
+    return
+  fi
+  install -m 0755 "${src}" /usr/local/sbin/arclap-station-installer
+  ok "Installer self-copied to /usr/local/sbin/arclap-station-installer (source: ${src})"
 }
 
 # ---------------------------------------------------------------------------
@@ -709,6 +721,57 @@ arclap_wheel_path() {
     die "No wheel found under ${ARCLAP_TMPDIR}/wheels/ — fetch_release() did not produce one."
   fi
   printf '%s' "${wheel}"
+}
+
+ARCLAP_ASSETS_DIR=""
+arclap_assets_dir() {
+  # Locate the directory containing systemd/, udev/, caddy/, avahi/,
+  # packaging/ and install.sh. When the installer is run via
+  # `curl | sudo bash`, $0 is just `bash` and there are no files
+  # alongside it — so we search in priority order:
+  #   1. The script's own directory (works for local clones).
+  #   2. ${ARCLAP_TMPDIR}/src — fetch_release() already cloned the
+  #      repo here when taking the build-from-source path.
+  #   3. Clone the repo on-demand into ${ARCLAP_TMPDIR}/src.
+  # The result is cached in ARCLAP_ASSETS_DIR so callers don't re-clone.
+  if [[ -n "${ARCLAP_ASSETS_DIR}" && -d "${ARCLAP_ASSETS_DIR}/systemd" ]]; then
+    printf '%s' "${ARCLAP_ASSETS_DIR}"
+    return
+  fi
+
+  local script_dir
+  script_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)" || script_dir=""
+  if [[ -n "${script_dir}" && -d "${script_dir}/systemd" ]]; then
+    ARCLAP_ASSETS_DIR="${script_dir}"
+    printf '%s' "${ARCLAP_ASSETS_DIR}"
+    return
+  fi
+
+  if [[ -d "${ARCLAP_TMPDIR}/src/systemd" ]]; then
+    ARCLAP_ASSETS_DIR="${ARCLAP_TMPDIR}/src"
+    printf '%s' "${ARCLAP_ASSETS_DIR}"
+    return
+  fi
+
+  # Final fallback: clone the repo. This path is taken when:
+  #   - The user ran `curl | bash` (so $0 has no surrounding files), AND
+  #   - fetch_release() got pre-built artifacts (so it didn't clone), AND
+  #   - We need systemd/udev/caddy/avahi files now.
+  info "Asset directories not found locally; cloning repo for systemd/udev/caddy/avahi/packaging files" >&2
+  if ! command -v git >/dev/null 2>&1; then
+    apt-get install -y --no-install-recommends git >/dev/null 2>&1 \
+      || die "git required to fetch installer assets"
+  fi
+  local src="${ARCLAP_TMPDIR}/src"
+  if [[ ! -d "${src}/.git" ]]; then
+    git clone --depth 1 "https://github.com/${ARCLAP_REPO}.git" "${src}" >/dev/null 2>&1 \
+      || die "Could not clone ${ARCLAP_REPO} to fetch assets"
+  fi
+  if [[ ! -d "${src}/systemd" ]]; then
+    die "Cloned repo has no systemd/ — repo layout changed unexpectedly. Check ${ARCLAP_REPO}."
+  fi
+  ARCLAP_ASSETS_DIR="${src}"
+  printf '%s' "${ARCLAP_ASSETS_DIR}"
 }
 
 short_serial() {
