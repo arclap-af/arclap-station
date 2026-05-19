@@ -157,9 +157,15 @@ install_apt_deps() {
 
   export DEBIAN_FRONTEND=noninteractive
 
-  # Use the distro-default python3 — works across Pi-OS Bookworm
-  # (3.11), Ubuntu Noble (3.12), and the post-Noble releases (3.12 /
-  # 3.13). All three are wire-compatible with the codebase.
+  # Base packages. We pull the distro-default python3 here as a safety
+  # net; further down we try to install python3.13 explicitly because
+  # several of our pinned C-extension deps (pydantic-core 2.23 via
+  # PyO3 0.22, Pillow 10.4) only support Python ≤3.13. Pi-OS Bookworm
+  # already ships 3.11 as default; Ubuntu Resolute ships 3.14 default
+  # but 3.13 is in universe.
+  #
+  # Image-format dev headers (zlib/jpeg/tiff/webp) live here so that
+  # Pillow can source-build as a last resort.
   local packages=(
     libgphoto2-dev
     gphoto2
@@ -179,6 +185,11 @@ install_apt_deps() {
     xz-utils
     libffi-dev
     libssl-dev
+    zlib1g-dev
+    libjpeg-dev
+    libtiff-dev
+    libwebp-dev
+    libfreetype-dev
   )
 
   if ! apt-get update -qq; then
@@ -206,10 +217,26 @@ install_apt_deps() {
     systemctl enable --now ntpsec || warn "Could not start ntpsec; carrying on."
   fi
 
-  # Resolve the python3 to actually use. Distro default is 3.11+ on
-  # every supported target (Pi-OS Bookworm, Ubuntu Noble/Oracular/
-  # Plucky/Resolute), but we double-check the version so we fail loudly
-  # if someone runs this on an EOL release.
+  # Best-effort: ensure python3.13 is present. All our pinned C-extension
+  # dependencies (pydantic-core, Pillow, bcrypt's Rust backend,
+  # cryptography) ship cp313 wheels — fast install, no compilation.
+  # cp314 wheels don't exist yet for the versions we pin, and PyO3 0.22
+  # (used transitively) hard-caps at 3.13. So if the distro-default is
+  # 3.14, we prefer 3.13 explicitly.
+  if ! command -v python3.13 >/dev/null 2>&1; then
+    if apt-cache show python3.13 >/dev/null 2>&1; then
+      info "Installing python3.13 + python3.13-venv (preferred over 3.14 for wheel compatibility)"
+      if apt-get install -y --no-install-recommends python3.13 python3.13-venv python3.13-dev; then
+        ok "python3.13 installed"
+      else
+        warn "Could not install python3.13; falling back to system python3."
+      fi
+    else
+      warn "python3.13 not in apt repos; falling back to system python3 (may force slow source builds)."
+    fi
+  fi
+
+  # Resolve which python3 to actually use (prefers 3.13 → 3.12 → 3.11 → python3).
   pick_python
 }
 
@@ -407,20 +434,40 @@ install_backend() {
 
   local venv="${ARCLAP_PREFIX}/venv"
 
-  if [[ ! -x "${venv}/bin/${ARCLAP_PYTHON}" ]] && [[ ! -x "${venv}/bin/python" ]]; then
-    "${ARCLAP_PYTHON}" -m venv "${venv}"
-    ok "Created venv at ${venv}"
+  # Detect a venv built with a different Python — happens when an
+  # earlier install attempt picked the distro-default 3.14 and a later
+  # run picks 3.13. Recreate from scratch instead of trying to graft.
+  local recreate=0
+  if [[ -x "${venv}/bin/python3" ]]; then
+    local venv_py target_py
+    venv_py="$("${venv}/bin/python3" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo unknown)"
+    target_py="$("${ARCLAP_PYTHON}" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+    if [[ "${venv_py}" != "${target_py}" ]]; then
+      warn "Existing venv uses Python ${venv_py}, installer is using ${target_py}. Recreating."
+      recreate=1
+    else
+      ok "venv already exists (Python ${venv_py})"
+    fi
   else
-    ok "venv already exists"
+    recreate=1
+  fi
+
+  if [[ "${recreate}" == "1" ]]; then
+    rm -rf "${venv}"
+    "${ARCLAP_PYTHON}" -m venv "${venv}"
+    ok "Created venv at ${venv} using ${ARCLAP_PYTHON}"
   fi
 
   "${venv}/bin/pip" install --upgrade --quiet pip setuptools wheel
 
   # Install the wheel (PEP 427 filename preserved by fetch_release()).
-  # --force-reinstall lets re-runs upgrade in place.
+  # --force-reinstall lets re-runs upgrade in place. We deliberately do
+  # NOT pass --quiet here — installing ~80 packages on a fresh Pi 5
+  # takes 5+ minutes, and a quiet pip leaves the operator wondering
+  # whether the installer is stuck. Real-time progress is worth the noise.
   local wheel
   wheel="$(arclap_wheel_path)"
-  "${venv}/bin/pip" install --upgrade --force-reinstall --quiet "${wheel}"
+  "${venv}/bin/pip" install --upgrade --force-reinstall "${wheel}"
   ok "Installed $(basename "${wheel}") into venv"
 
   # CLI shim — single shared name regardless of internal naming.
