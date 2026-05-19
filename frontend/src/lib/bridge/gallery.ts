@@ -38,6 +38,34 @@ const listResponseSchema = z.object({
 
 function adaptPhoto(raw: Record<string, any>): Photo {
   const id = String(raw.id ?? "");
+  // Backend currently returns a single `upload_state` string per photo,
+  // not a per-destination array. Synthesize one entry so the UI's
+  // Uploaded/Pending pill stops permanently saying "Local".
+  let uploads: Photo["uploads"];
+  if (Array.isArray(raw.uploads) && raw.uploads.length > 0) {
+    uploads = raw.uploads;
+  } else if (raw.upload_state) {
+    const state = String(raw.upload_state);
+    const mappedState: "pending" | "in_progress" | "uploaded" | "failed" =
+      state === "done"
+        ? "uploaded"
+        : state === "in_progress"
+          ? "in_progress"
+          : state === "failed" || state === "failed_permanent"
+            ? "failed"
+            : "pending";
+    uploads = [
+      {
+        destination_id: "any",
+        destination_name: "Destinations",
+        state: mappedState,
+        uploaded_at: mappedState === "uploaded" ? String(raw.captured_at ?? "") : null,
+        remote_key: null,
+      },
+    ];
+  } else {
+    uploads = [];
+  }
   return {
     id,
     filename: String(raw.filename ?? "unknown.jpg"),
@@ -49,7 +77,7 @@ function adaptPhoto(raw: Record<string, any>): Photo {
     shutter: raw.exif?.shutter ? String(raw.exif.shutter) : "—",
     aperture: raw.exif?.aperture ? String(raw.exif.aperture) : "—",
     starred: Boolean(raw.starred),
-    uploads: Array.isArray(raw.uploads) ? raw.uploads : [],
+    uploads,
     path: String(raw.path ?? ""),
     thumb_url: `${API_PREFIX}/gallery/${id}/thumb`,
     original_url: `${API_PREFIX}/gallery/${id}/full`,

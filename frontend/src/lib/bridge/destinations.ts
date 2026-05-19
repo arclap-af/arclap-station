@@ -38,7 +38,9 @@ function adapt(raw: Record<string, any>): Destination {
     enabled: Boolean(raw.enabled),
     config: (raw.config ?? {}) as Record<string, unknown>,
     queue_pending: Number(raw.queue_pending ?? 0),
-    queue_failed: Number(raw.queue_failed ?? raw.last_error ? 1 : 0),
+    // Parens fix: '?? ' binds tighter than '?:', so `raw.queue_failed ??
+    // raw.last_error ? 1 : 0` was reading `last_error` (a string) as 1.
+    queue_failed: Number(raw.queue_failed ?? (raw.last_error ? 1 : 0)),
     last_sync: typeof raw.last_sync === "string" ? raw.last_sync : null,
     bytes_today: Number(raw.bytes_today ?? 0),
     retry_policy: Number(raw.retry_policy ?? 3),

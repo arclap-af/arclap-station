@@ -16,7 +16,11 @@ export function URLBar({ ip, hostname, status }: URLBarProps) {
         ))}
       </span>
       <span className="url" style={{ marginLeft: 8 }}>
-        http://{ip}/
+        {/* Derive from window.location so the cockpit's actual scheme
+            (https with the Caddy self-signed cert) shows correctly; also
+            falls back to hostname when ip is unknown ('—'). */}
+        {typeof window !== "undefined" ? window.location.protocol : "https:"}//
+        {ip && ip !== "—" ? ip : hostname || (typeof window !== "undefined" ? window.location.host : "")}/
       </span>
       <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--as-ink-4)" }}>
         {hostname} · <span style={{ color: statusColor }}>● {statusLabel}</span>
