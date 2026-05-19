@@ -1,7 +1,10 @@
 [Unit]
 Description=Arclap Station — health probe (poked by arclap-watchdog.timer)
 After=arclap-station.service
-PartOf=arclap-station.service
+# PartOf was removed: it created a feedback loop where the watchdog
+# restarting the main service cascaded back into the watchdog itself,
+# which re-fired and restarted again. The timer fires this oneshot
+# independently; we don't need the lifecycle binding.
 
 [Service]
 Type=oneshot

@@ -654,11 +654,20 @@ enable_services() {
   # an earlier install left it enabled.
   systemctl disable --now arclap-uploader.service 2>/dev/null || true
 
+  # NOTE: arclap-watchdog.timer is NOT enabled by default. The current
+  # watchdog can self-restart the service into a fail-count loop when
+  # the probe blips during cert warmup or Caddy reload. Once the probe
+  # is hardened (skip during startup, wait for TLS-ready, etc.) we can
+  # re-enable. For now the user can `systemctl enable --now
+  # arclap-watchdog.timer` manually if they want it. Defensively
+  # disable in case a prior install enabled it.
+  systemctl disable --now arclap-watchdog.timer arclap-watchdog.service 2>/dev/null || true
+  rm -f /run/arclap-watchdog.fail
+
   local units=(
     caddy
     avahi-daemon
     arclap-station.service
-    arclap-watchdog.timer
   )
   local failed=()
   for u in "${units[@]}"; do
