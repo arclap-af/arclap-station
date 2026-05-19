@@ -62,7 +62,10 @@ export const activityEventSchema = z.object({
 // backend/arclap_station/api/home.py:_build_snapshot) into the shape
 // the dashboard wants. Missing fields fall back to safe defaults so
 // the UI keeps rendering even if a future backend trims its output.
-function adapt(raw: Record<string, unknown>): Telemetry {
+//
+// Exported because the Home page also receives WebSocket pushes that
+// carry the same raw shape and need the same adaptation.
+export function adaptTelemetry(raw: Record<string, unknown>): Telemetry {
   const camRaw = (raw["camera"] as Record<string, unknown> | undefined) ?? null;
   const stationRaw = (raw["station"] as Record<string, unknown> | undefined) ?? {};
   const queueStats = (raw["queue_stats"] as Record<string, unknown> | undefined) ?? {};
@@ -129,7 +132,7 @@ function adapt(raw: Record<string, unknown>): Telemetry {
 export const home = {
   async telemetry(): Promise<Telemetry> {
     const raw = await apiFetch<Record<string, unknown>>("/home");
-    return adapt(raw);
+    return adaptTelemetry(raw);
   },
   async activity(_limit = 10): Promise<ActivityEvent[]> {
     // Backend doesn't expose /api/home/activity yet; return empty so

@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "../components/Button";
 import { Pill } from "../components/Pill";
 import { Icon, I } from "../components/icons";
-import { home as homeApi, type ActivityEvent, type Telemetry } from "../lib/bridge/home";
+import { home as homeApi, adaptTelemetry, type ActivityEvent, type Telemetry } from "../lib/bridge/home";
 import { useWebSocket } from "../lib/ws";
 
 export function Home() {
@@ -24,10 +24,13 @@ export function Home() {
 
   const onWsMessage = useCallback((ev: MessageEvent) => {
     try {
-      const payload = JSON.parse(ev.data) as Telemetry;
-      setLive(payload);
+      // WS frames carry the raw backend snapshot (the same shape
+      // /api/home returns); pipe it through the same adapter the
+      // polled query uses so the field names match what the UI reads.
+      const raw = JSON.parse(ev.data) as Record<string, unknown>;
+      setLive(adaptTelemetry(raw));
     } catch {
-      // ignore non-JSON frames
+      // ignore non-JSON frames or shape errors — fall back to polled data
     }
   }, []);
   const { status: wsStatus } = useWebSocket("/api/home/ws", onWsMessage);
