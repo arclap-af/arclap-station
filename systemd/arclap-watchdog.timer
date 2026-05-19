@@ -1,10 +1,13 @@
 [Unit]
-Description=Arclap Station — fire the health probe every 30s
+Description=Arclap Station — fire the service health probe every 60 seconds
+Documentation=https://github.com/arclap-af/arclap-station
 
 [Timer]
-OnBootSec=60s
-OnUnitActiveSec=30s
-AccuracySec=1s
+# Long boot grace — the backend takes ~5–10 s to come up, and Caddy
+# self-signed cert generation can take ~3 s on first boot.
+OnBootSec=180s
+OnUnitActiveSec=60s
+AccuracySec=5s
 Unit=arclap-watchdog.service
 
 [Install]

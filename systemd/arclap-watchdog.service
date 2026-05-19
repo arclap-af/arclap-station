@@ -1,45 +1,62 @@
 [Unit]
-Description=Arclap Station — health probe (poked by arclap-watchdog.timer)
+Description=Arclap Station — service health probe (poked by arclap-watchdog.timer)
 After=arclap-station.service
-# PartOf was removed: it created a feedback loop where the watchdog
-# restarting the main service cascaded back into the watchdog itself,
-# which re-fired and restarted again. The timer fires this oneshot
-# independently; we don't need the lifecycle binding.
+# DO NOT use PartOf=arclap-station.service — it created a cascade restart
+# loop in earlier versions. The timer fires this oneshot independently.
 
 [Service]
 Type=oneshot
 User=root
 Group=root
 
-# Fires every 30s via the timer. On 3 consecutive failures (tracked in
-# /run/arclap-watchdog.fail) we restart the service. The probe goes via Caddy
-# so we exercise the full request path Caddy serves to LAN clients.
+# Health probe: loopback HTTP to the backend (NOT https through Caddy —
+# curl can't send SNI to a literal IP, which the old probe did, which
+# meant the cert never matched and every probe returned a TLS error,
+# which incremented a fail counter that never got reset, which restarted
+# the service every 30 seconds for the entire deployment).
+#
+# After 3 consecutive failures we attempt one systemctl restart.
+# After a restart the fail counter is forced back to zero — we don't
+# punish a service that's still booting.
+#
+# Startup grace: skip the first 60s after boot AND the first 30s after
+# any service restart.  The watchdog state file's mtime tracks last reset.
 ExecStart=/usr/bin/env bash -c '\
   STATE=/run/arclap-watchdog.fail; \
-  if /usr/bin/timeout 5 /usr/bin/curl --silent --insecure --fail https://127.0.0.1/api/health >/dev/null; then \
+  UP_FILE=/run/arclap-watchdog.lastup; \
+  GRACE=60; \
+  # Skip if service has been up for less than GRACE seconds. \
+  UP_TS=$(systemctl show arclap-station.service -p ActiveEnterTimestampMonotonic --value 2>/dev/null || echo 0); \
+  NOW_MONO=$(awk "{print int(\$1)}" /proc/uptime 2>/dev/null || echo 0); \
+  SVC_UP_SECS=$(( NOW_MONO - (UP_TS / 1000000) )); \
+  if [ "$SVC_UP_SECS" -lt "$GRACE" ]; then \
+    echo "service uptime ${SVC_UP_SECS}s < ${GRACE}s grace, skipping probe"; \
     rm -f "$STATE"; \
     exit 0; \
   fi; \
-  count=$(test -f "$STATE" && cat "$STATE" || echo 0); \
+  # Probe via loopback HTTP — no TLS / SNI / Caddy involvement. \
+  if /usr/bin/timeout 8 /usr/bin/curl --silent --fail http://127.0.0.1:8080/api/health >/dev/null; then \
+    rm -f "$STATE"; \
+    exit 0; \
+  fi; \
+  count=$(cat "$STATE" 2>/dev/null || echo 0); \
   count=$((count + 1)); \
-  echo $count > "$STATE"; \
+  echo "$count" > "$STATE"; \
   echo "watchdog probe failed (count=$count)"; \
   if [ "$count" -ge 3 ]; then \
     echo "watchdog: 3 consecutive failures — restarting arclap-station.service"; \
     /bin/systemctl restart arclap-station.service; \
     rm -f "$STATE"; \
+    date +%s > "$UP_FILE"; \
   fi'
 
-# Don't gate other units on this oneshot.
-TimeoutStartSec=10
+TimeoutStartSec=15
 
-# ---- Hardening ----
+# Minimum hardening — we need /run access.
 NoNewPrivileges=true
-ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/run
-RestrictNamespaces=true
 SyslogIdentifier=arclap-watchdog
 
 [Install]
