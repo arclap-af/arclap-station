@@ -30,7 +30,12 @@ readonly ARCLAP_LOGDIR="/var/log/arclap"
 readonly ARCLAP_PHOTODIR="/media/sdcard/photos"
 readonly ARCLAP_SOCKET="/run/arclap-station.sock"
 readonly ARCLAP_TMPDIR="/tmp/arclap-install-$$"
-readonly ARCLAP_PYTHON="python3.11"
+# ARCLAP_PYTHON is resolved at runtime in pick_python(); we accept any
+# python3 >= 3.11 because the codebase doesn't use anything 3.12-or-later
+# specific. Older Pi-OS Bookworm ships 3.11; Ubuntu Noble ships 3.12;
+# the post-Noble Ubuntu releases (24.10+, "Oracular"/"Plucky"/"Resolute")
+# ship 3.12 or 3.13. Pinning to 3.11 broke installs on those.
+ARCLAP_PYTHON=""
 
 # Colour helpers (no-op if stdout is not a TTY).
 if [[ -t 1 ]]; then
@@ -103,15 +108,24 @@ preflight() {
     warn "/proc/cpuinfo is unreadable; skipping hardware probe"
   fi
 
-  # OS check: Bookworm + aarch64.
+  # OS check: any Debian/Ubuntu-ish aarch64 with apt + Python ≥ 3.11.
+  # We don't refuse newer releases — the codebase is forward-compatible
+  # with Python 3.12 and 3.13. Just inform the operator what we saw.
+  # Sourced in a subshell so the caller's $VERSION isn't clobbered by
+  # Ubuntu's own VERSION="26.04 (Resolute Raccoon)".
   if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    if [[ "${VERSION_CODENAME:-}" != "bookworm" ]]; then
-      warn "OS codename is '${VERSION_CODENAME:-unknown}', expected 'bookworm'. Things may still work."
-    else
-      ok "Detected Raspberry Pi OS Bookworm"
-    fi
+    local os_id os_codename os_pretty
+    os_id=$(. /etc/os-release; printf '%s' "${ID:-}")
+    os_codename=$(. /etc/os-release; printf '%s' "${VERSION_CODENAME:-}")
+    os_pretty=$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-unknown}")
+    case "${os_id}" in
+      raspbian|debian|ubuntu)
+        ok "Detected ${os_pretty} (${os_codename:-no-codename})"
+        ;;
+      *)
+        warn "OS id '${os_id}' is not Debian/Ubuntu-derived. Apt-based install may fail."
+        ;;
+    esac
   fi
 
   local arch
@@ -143,14 +157,17 @@ install_apt_deps() {
 
   export DEBIAN_FRONTEND=noninteractive
 
+  # Use the distro-default python3 — works across Pi-OS Bookworm
+  # (3.11), Ubuntu Noble (3.12), and the post-Noble releases (3.12 /
+  # 3.13). All three are wire-compatible with the codebase.
   local packages=(
     libgphoto2-dev
     gphoto2
     caddy
     avahi-daemon
     avahi-utils
-    python3.11
-    python3.11-venv
+    python3
+    python3-venv
     python3-pip
     usbutils
     ntpsec
@@ -188,6 +205,33 @@ install_apt_deps() {
   if ! systemctl is-active --quiet ntpsec; then
     systemctl enable --now ntpsec || warn "Could not start ntpsec; carrying on."
   fi
+
+  # Resolve the python3 to actually use. Distro default is 3.11+ on
+  # every supported target (Pi-OS Bookworm, Ubuntu Noble/Oracular/
+  # Plucky/Resolute), but we double-check the version so we fail loudly
+  # if someone runs this on an EOL release.
+  pick_python
+}
+
+pick_python() {
+  if [[ -n "${ARCLAP_PYTHON}" ]]; then
+    return
+  fi
+  local candidates=(python3.13 python3.12 python3.11 python3)
+  for c in "${candidates[@]}"; do
+    if command -v "$c" >/dev/null 2>&1; then
+      local v
+      v=$("$c" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+      local major minor
+      major="${v%%.*}"; minor="${v##*.}"
+      if [[ "${major}" -ge 3 && "${minor}" -ge 11 ]]; then
+        ARCLAP_PYTHON="$c"
+        ok "Using ${c} (Python ${v})"
+        return
+      fi
+    fi
+  done
+  die "No suitable Python 3.11+ found. Tried: ${candidates[*]}"
 }
 
 # ---------------------------------------------------------------------------
