@@ -154,12 +154,12 @@ export function SetupWizard() {
     switch (cur.id) {
       case "pin":
         return state.pin.every((d) => /^\d$/.test(d));
-      case "camera":
-        return state.cameraDetected;
       case "station":
         return state.stationName.trim().length > 0;
-      case "check":
-        return state.acceptancePassed;
+      // Camera detection + acceptance check are advisory, not gating —
+      // a station can be commissioned without a DSLR plugged in (offline
+      // mode for testing), and the acceptance check is a sanity probe
+      // not a hard requirement to finish setup.
       default:
         return true;
     }
@@ -240,7 +240,7 @@ export function SetupWizard() {
               ← Back
             </Button>
             <div style={{ display: "flex", gap: 8 }}>
-              {cur.id !== "welcome" && cur.id !== "check" && cur.id !== "done" && (
+              {cur.id !== "welcome" && cur.id !== "done" && (
                 <Button onClick={() => setStepIndex((i) => Math.min(total - 1, i + 1))} disabled={submit.isPending}>
                   Skip
                 </Button>
