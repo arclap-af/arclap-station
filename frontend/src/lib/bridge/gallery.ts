@@ -68,11 +68,11 @@ export const gallery = {
     const resp = await apiJson(path, listResponseSchema);
     return resp.items.map(adaptPhoto);
   },
-  async star(id: string, _starred: boolean): Promise<void> {
+  async star(_id: string, _starred: boolean): Promise<void> {
     // Backend doesn't expose /star yet — no-op so the UI doesn't 404.
     return;
   },
-  async retry(id: string, _destinationId: string): Promise<void> {
+  async retry(_id: string, _destinationId: string): Promise<void> {
     // Backend has /api/queue/retry (drain-once) at the queue level —
     // a per-photo retry isn't wired. No-op for now.
     return;
