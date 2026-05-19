@@ -24,9 +24,22 @@ router = APIRouter(prefix="/api/home", tags=["home"])
 
 def _build_snapshot() -> dict[str, Any]:
     from arclap_station import __version__ as _version  # noqa: PLC0415
+    from arclap_station.camera import health as _ch  # noqa: PLC0415
 
     metrics = snapshot()
-    info = get_adapter().detect()
+    # Avoid calling detect() here — when the camera is unplugged or
+    # locked up, that path can stall for several seconds and turn /api/home
+    # (polled every 5 s by the cockpit) into a tarpit. We trust the
+    # cross-process health beacon for the boolean detected flag, and only
+    # call detect() if the beacon is fresh-and-ok (so the call should be
+    # near-instant on a cached handle).
+    if _ch.is_fresh_and_ok():
+        try:
+            info = get_adapter().detect()
+        except Exception:  # noqa: BLE001
+            info = None
+    else:
+        info = None
     engine = get_engine()
     photos = get_store()
     queue = get_queue()
@@ -73,8 +86,12 @@ def _build_snapshot() -> dict[str, Any]:
 
     captures_24h = photos.count_since(one_day_ago)
     disk_pct = float(metrics.get("disk_used_pct") or 0)
+    # If info is None (beacon stale/error), camera is treated as not
+    # detected for the status derivation. Status will be "warn" / "offline"
+    # which is exactly what we want surfaced.
+    cam_detected = bool(info and info.detected)
     status = _derive_status(
-        info.detected, dests, queue.pending_depth(), captures_24h, disk_pct,
+        cam_detected, dests, queue.pending_depth(), captures_24h, disk_pct,
         metrics.get("uptime_seconds", 0),
     )
 
@@ -85,12 +102,12 @@ def _build_snapshot() -> dict[str, Any]:
         "ip": primary_ip,
         "status": status,
         "camera": {
-            "detected": info.detected,
-            "model": info.model,
-            "battery": info.battery,
-            "lens": info.lens,
-            "port": info.port,
-            "shutter_count": info.shutter_count,
+            "detected": cam_detected,
+            "model": info.model if info else None,
+            "battery": info.battery if info else None,
+            "lens": info.lens if info else None,
+            "port": info.port if info else None,
+            "shutter_count": info.shutter_count if info else None,
         },
         "station": {
             "name": station.name,

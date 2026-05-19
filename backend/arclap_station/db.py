@@ -145,10 +145,28 @@ class Database:
             timeout=10.0,
         )
         conn.row_factory = sqlite3.Row
+        # WAL gives us reader-writer concurrency without write lockups.
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA synchronous=NORMAL")
+        # Don't return early on a transient SQLITE_BUSY — wait up to 5s
+        # for the writer. Critical on the Pi where APScheduler, audit
+        # emit, and the API can all hit the DB simultaneously.
         conn.execute("PRAGMA busy_timeout=5000")
+        # NORMAL synchronous is the documented safe choice for WAL —
+        # ACID-correct even after power loss, and ~3× faster than FULL.
+        conn.execute("PRAGMA synchronous=NORMAL")
+        # FK enforcement is essential — upload_queue references photos.
+        conn.execute("PRAGMA foreign_keys=ON")
+        # In-memory temp tables. SQLite uses temp tables for sub-selects
+        # and ORDER BY without an index; on disk that becomes an I/O
+        # bottleneck on the SD card.
+        conn.execute("PRAGMA temp_store=MEMORY")
+        # 32 MB page cache (the Pi 5 has 8 GB RAM; we can afford this).
+        # Negative value = KB rather than pages.
+        conn.execute("PRAGMA cache_size=-32000")
+        # 64 MB mmap window for reads — keeps the hot prefix of the DB
+        # paged into the kernel page cache for fast SELECTs without
+        # blocking on the SD card.
+        conn.execute("PRAGMA mmap_size=67108864")
         return conn
 
     @contextmanager

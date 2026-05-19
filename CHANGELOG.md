@@ -1,5 +1,87 @@
 # Arclap Station — Changelog
 
+## v0.6.0 — 2026-05-19 (perf + stability + resource limits)
+
+A full audit revealed that the v0.5 init retries (1+3+10s) had silently
+turned every endpoint that touches the camera into a 12–20 s blocker
+while the camera was unplugged. This release fixes that regression and
+hardens the system around it.
+
+### Performance (massive speedup)
+Before → after, on a Pi with an unplugged camera:
+
+| Endpoint              | v0.5      | v0.6   | Speedup |
+|-----------------------|-----------|--------|---------|
+| `/api/health`         | 10,612 ms | 3 ms   | 3500×   |
+| `/api/home`           | 15,649 ms | 25 ms  | 625×    |
+| `/api/settings/general` | 10,697 ms | 1 ms | 10000×  |
+| `/api/camera/info`    | 18,907 ms | 4 ms   | 4700×   |
+| `/api/schedule/list`  | 4,118 ms  | 2 ms   | 2000×   |
+
+- **Adapter fail-fast window**: if the health beacon shows a failure
+  in the last 30 s, `_ensure()` does ONE init attempt with no retry
+  sleeps. The 1+3+10 s backoff still kicks in for transient errors
+  on a previously-healthy camera, but it no longer tarpits every API
+  call when the camera is physically absent.
+- **`/api/health` no longer touches the camera adapter** — uses the
+  beacon (`is_fresh_and_ok()`) instead. Critical because the service
+  watchdog polls this endpoint and a 12 s response could have
+  triggered false service restarts.
+- **`/api/home` and `/api/camera/info` short-circuit when the beacon
+  is unhealthy**: render with cached-camera-null instead of blocking
+  on detect.
+- **Preview WebSocket exponential backoff**: when the preview throws,
+  wait doubles 1s → 2 → 4 → 8 → 16 → 30s (cap). Stops the 30
+  log-warnings/minute spam we observed when the camera was unplugged.
+
+### SQLite tuning
+- `busy_timeout = 5000 ms` (was 0 default → "database is locked"
+  thrown immediately on contention)
+- `synchronous = NORMAL` (was FULL — overkill for WAL, costs ~3× write
+  throughput)
+- `temp_store = MEMORY` (sub-queries/ORDER BY without index no longer
+  hit the SD card)
+- `cache_size = -32000` (32 MB page cache; we have 8 GB RAM)
+- `mmap_size = 64 MB` (keeps hot DB pages in the kernel page cache)
+- **Periodic WAL checkpoint loop** (every 15 min, PASSIVE mode).
+  Previously the `-wal` sidecar grew unbounded between retention
+  sweeps; observed at 4 MB after a few hours, would have grown to
+  hundreds of MB over a 2-year deployment.
+
+### Stability
+- **systemd `StartLimitBurst=5 / IntervalSec=600`** — if the service
+  crashes >5 times in 10 minutes, stop restarting. Prevents crash
+  loops from masking deeper bugs while flooding journald.
+  *(Critical fix: these MUST live in `[Unit]`, not `[Service]`, or
+  systemd silently uses 10 s/5 defaults.)*
+- **`MemoryHigh=384M / MemoryMax=1G`**: soft cap triggers kernel
+  memory pressure on us first; hard cap protects the rest of the Pi
+  from a single runaway request.
+- **`CPUWeight=200`**: capture + upload win over background services.
+- **Emergency disk-full gate**: capture (API + scheduler) refuses to
+  fire when free space < 2%. Returns 507 Insufficient Storage on the
+  API, returns `{skipped: true, reason: "disk_full"}` from the
+  scheduler. Audited with `capture.refused_disk_full`.
+
+### Operations
+- **journald drop-in** `/etc/systemd/journald.conf.d/50-arclap.conf`:
+  `SystemMaxUse=500M`, `SystemKeepFree=2G`, `MaxRetentionSec=90d`,
+  `Compress=yes`. Without this journald grabs 10% of /var → ~5 GB on
+  a 64 GB SD card, all of which is photo-buffering space we'd rather
+  keep free.
+- **Caddy SPA fallback now sets `Cache-Control: no-cache`** on
+  `index.html` so a deploy never leaves clients pointing at a
+  deleted asset hash (the "white page after upgrade" failure).
+  `/assets/*` keeps `immutable, max-age=31536000` (Vite hashes the
+  filenames).
+
+### Verified
+- 55/55 backend tests pass.
+- WAL file truncated 4 MB → 0 bytes by the new checkpoint.
+- systemctl shows `MemoryHigh=402653184 / MemoryMax=1073741824 /
+  CPUWeight=200 / StartLimitIntervalUSec=10min / StartLimitBurst=5`.
+- Latency table above measured live on `arclap-st-90107cb4`.
+
 ## v0.5.0 — 2026-05-19 (camera stability hardening)
 
 Nine layered defences against the tethered-DSLR failure modes that

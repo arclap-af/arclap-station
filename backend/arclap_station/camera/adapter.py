@@ -148,12 +148,23 @@ class _GPhoto2Backend:
 
     # ---- handle lifecycle (B, C) ----------------------------------------
 
+    # Fail-fast window: if we have a fresh failure on record, the next
+    # _ensure() call does ONE attempt with no retry sleeps. Without this
+    # check, calling detect() while the camera is unplugged would tie
+    # up an event-loop worker for ~14 s (1 + 3 + 10 s of backoff),
+    # which makes /api/health, /api/home and /api/camera/info crawl.
+    FAIL_FAST_WINDOW_SEC = 30.0
+
     def _ensure(self) -> Any:
         """Return a live Camera handle, creating one if needed.
 
-        Retries init up to 3 times on transient errors so a brief EBUSY
-        (the kernel re-enumerating after a USB reset, or another process
-        holding the bus for a moment) doesn't permanently fail us.
+        Retries init up to 3 times (1 s / 3 s / 10 s) on transient errors
+        so a brief EBUSY (the kernel re-enumerating after a USB reset,
+        or another process holding the bus for a moment) doesn't
+        permanently fail us — BUT only when there's been no recent
+        failure on record. After a recent failure we fail-fast on a
+        single attempt to keep the API event loop responsive while the
+        camera is physically absent or locked up.
         """
         import time as _t  # noqa: PLC0415
 
@@ -164,7 +175,25 @@ class _GPhoto2Backend:
         if self._cam is not None:
             return self._cam
 
-        backoff = [1.0, 3.0, 10.0]
+        # Decide retry budget based on recent health.
+        try:
+            from arclap_station.camera.health import read_state  # noqa: PLC0415
+            from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
+
+            st = read_state()
+            err_at = st.get("last_error_at")
+            if err_at:
+                try:
+                    age = (_dt.now(_UTC) - _dt.fromisoformat(err_at)).total_seconds()
+                    fail_fast = 0 <= age <= self.FAIL_FAST_WINDOW_SEC
+                except (ValueError, TypeError):
+                    fail_fast = False
+            else:
+                fail_fast = False
+        except Exception:  # noqa: BLE001
+            fail_fast = False
+
+        backoff: list[float] = [0.0] if fail_fast else [1.0, 3.0, 10.0]
         last_exc: Exception | None = None
         for attempt, wait in enumerate(backoff, start=1):
             try:
@@ -176,14 +205,15 @@ class _GPhoto2Backend:
                 return cam
             except self._gp.GPhoto2Error as exc:
                 last_exc = exc
-                log.info(
-                    "camera init attempt %d/%d failed: %s — retrying in %.1fs",
-                    attempt,
-                    len(backoff),
-                    exc,
-                    wait,
-                )
-                if attempt < len(backoff):
+                if not fail_fast:
+                    log.info(
+                        "camera init attempt %d/%d failed: %s — retrying in %.1fs",
+                        attempt,
+                        len(backoff),
+                        exc,
+                        wait,
+                    )
+                if attempt < len(backoff) and wait > 0:
                     _t.sleep(wait)
         # All attempts exhausted.
         assert last_exc is not None

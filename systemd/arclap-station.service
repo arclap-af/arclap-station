@@ -4,6 +4,11 @@ Documentation=https://github.com/arclap-af/arclap-station
 After=network-online.target
 Wants=network-online.target
 
+# Restart budget (these MUST live under [Unit], not [Service], or
+# systemd silently falls back to defaults of 10s/5).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
 [Service]
 # Plain TCP — uvicorn binds 127.0.0.1:8080, Caddy reverse-proxies to that.
 # Socket activation was planned but the CLI doesn't implement the
@@ -30,10 +35,21 @@ RestartSec=3
 TimeoutStartSec=60
 TimeoutStopSec=30
 
+# (StartLimitIntervalSec/StartLimitBurst live in [Unit] above —
+# putting them here makes systemd silently revert to defaults.)
+
 # Resource limits.
 LimitNOFILE=4096
 TasksMax=512
-MemoryMax=512M
+# Soft cap → the kernel applies memory pressure to us before invoking
+# the OOM killer. Hard cap is 1G so a single runaway request (eg a
+# very large gphoto2 widget tree) can't take the whole Pi down with
+# us — but we stay headroom-rich on an 8 GB Pi 5 the rest of the time.
+MemoryHigh=384M
+MemoryMax=1G
+# CPU weight relative to other services (default 100). Capture +
+# upload have to win over background tasks on the same Pi.
+CPUWeight=200
 
 # ---- Hardening ----
 NoNewPrivileges=true

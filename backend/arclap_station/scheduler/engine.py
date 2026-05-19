@@ -123,6 +123,25 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
     if not info.detected:
         return {"ok": False, "skipped": True, "reason": "no_camera"}
 
+    # Disk-pressure gate, same threshold as the API capture path. The
+    # nightly retention sweep is reactive; this stops the scheduler
+    # from filling the card between sweeps.
+    try:
+        import shutil as _shutil  # noqa: PLC0415
+        photos_root = get_settings().paths.photos
+        usage = _shutil.disk_usage(photos_root)
+        free_pct = (usage.free / usage.total) * 100 if usage.total > 0 else 100
+        if free_pct < 2.0:
+            try:
+                from arclap_station.audit import emit as _audit  # noqa: PLC0415
+                _audit("system", "capture.refused_disk_full",
+                       {"schedule_id": schedule_id, "free_pct": round(free_pct, 2)})
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "skipped": True, "reason": "disk_full"}
+    except (OSError, ValueError, ImportError):
+        pass  # fall through — capture will fail loudly if disk is truly dead
+
     photo_path = adapter.capture()
     # Same EXIF extraction as /api/camera/capture — so scheduled photos
     # carry ISO/shutter/aperture/dimensions in the Gallery instead of

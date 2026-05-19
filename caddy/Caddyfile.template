@@ -71,10 +71,14 @@
 	}
 
 	# SPA fallback — serve index.html for any unknown path so client routes work.
+	# index.html itself MUST NOT be cached: the asset hashes inside change
+	# on every build, and a stale index pointing at a deleted bundle hash
+	# is the classic "white page after upgrade" failure.
 	handle {
 		root * /var/www/arclap
 		try_files {path} /index.html
 		file_server
+		header Cache-Control "no-cache, no-store, must-revalidate"
 	}
 }
 

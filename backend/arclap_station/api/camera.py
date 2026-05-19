@@ -12,6 +12,7 @@ from arclap_station.api.deps import require_session
 from arclap_station.audit import emit as audit_emit
 from arclap_station.camera.adapter import get_adapter
 from arclap_station.camera.stream import serve_preview_ws
+from arclap_station.config import get_settings
 from arclap_station.photos.exif import extract_exif
 from arclap_station.photos.store import get_store
 from arclap_station.uploaders.queue import get_queue
@@ -66,11 +67,45 @@ async def set_setting(
     return {"ok": True}
 
 
+def _refuse_if_disk_critical() -> None:
+    """Raise 507 (Insufficient Storage) if the photo volume is critically low.
+
+    Threshold is conservative on purpose — the retention sweep runs
+    nightly and will free space, but in the meantime we'd rather drop a
+    capture (audited) than fill the SD card and crash captures forever.
+    """
+    import shutil as _shutil  # noqa: PLC0415
+
+    try:
+        photos_root = get_settings().paths.photos
+        usage = _shutil.disk_usage(photos_root)
+        free_pct = (usage.free / usage.total) * 100 if usage.total > 0 else 100
+    except (OSError, ValueError):
+        return  # disk probe itself failed — let capture proceed
+    if free_pct < 2.0:
+        audit_emit(
+            "system",
+            "capture.refused_disk_full",
+            {"free_pct": round(free_pct, 2)},
+        )
+        raise HTTPException(
+            status_code=507,
+            detail=f"Disk critically full ({free_pct:.1f}% free). Run retention sweep.",
+        )
+
+
 @router.post("/capture")
 async def capture(
     enqueue: bool = True,
     _: dict[str, Any] = Depends(require_session),
 ) -> dict[str, Any]:
+    # Disk-pressure gate: refuse to capture if the photo volume is
+    # < 2% free. The retention sweep runs nightly and is reactive; the
+    # capture path is the proactive defence. Without this gate, a
+    # construction-site Pi that lost connectivity for weeks would
+    # eventually wedge itself with an unwritable SD card.
+    _refuse_if_disk_critical()
+
     try:
         photo_path: Path = get_adapter().capture()
     except Exception as exc:  # noqa: BLE001
@@ -112,17 +147,28 @@ async def camera_info(_: dict[str, Any] = Depends(require_session)) -> dict[str,
     The cockpit's Camera page uses this to render the mode/ISO/shutter/
     aperture chip rows — instead of guessing what the camera supports
     from a hardcoded list, we ask gphoto2 what its real options are.
+
+    Fast-path: when the beacon shows a recent failure, we skip detect()
+    and list_config() entirely so the page still renders fast (~30 ms
+    instead of ~12 s) and shows `detected:false` plus the cached health
+    error string. The cockpit polls this every 30 s; an unplugged camera
+    must not make every poll a 12 s blocker.
     """
+    from arclap_station.camera import health as _ch  # noqa: PLC0415
+
     adapter = get_adapter()
-    try:
-        info = adapter.detect()
-    except Exception:  # noqa: BLE001
-        info = None
     tree: dict[str, Any] = {}
-    try:
-        tree = adapter.list_config()
-    except Exception:  # noqa: BLE001
-        tree = {}
+    info = None
+    if _ch.is_fresh_and_ok():
+        try:
+            info = adapter.detect()
+        except Exception:  # noqa: BLE001
+            info = None
+        if info and info.detected:
+            try:
+                tree = adapter.list_config()
+            except Exception:  # noqa: BLE001
+                tree = {}
 
     def widget(path: str) -> dict[str, Any]:
         return tree.get(path, {}) if isinstance(tree, dict) else {}

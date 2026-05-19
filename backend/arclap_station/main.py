@@ -38,6 +38,8 @@ def _configure_logging(level: str = "INFO") -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    import asyncio  # noqa: PLC0415
+
     settings = get_settings()
     settings.paths.ensure()
     db = get_db()
@@ -54,10 +56,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine.start()
     queue = get_queue()
     queue.start()
+
+    # Periodic WAL checkpoint — without this the -wal sidecar grows
+    # unbounded between retention sweeps (we saw 4 MB after a few hours).
+    # PASSIVE mode never blocks writers; we don't need TRUNCATE here
+    # because the nightly retention sweep already does that.
+    async def _wal_checkpoint_loop() -> None:
+        while True:
+            await asyncio.sleep(900)  # 15 min
+            try:
+                with db.connect() as conn:
+                    conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception as exc:  # noqa: BLE001
+                log.debug("wal_checkpoint failed: %s", exc)
+
+    wal_task = asyncio.create_task(_wal_checkpoint_loop())
+
     log.info("arclap-station started — etc=%s var=%s", settings.paths.etc, settings.paths.var)
     try:
         yield
     finally:
+        wal_task.cancel()
+        try:
+            await wal_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
         try:
             queue.stop()
         except Exception:  # noqa: BLE001
@@ -97,8 +120,16 @@ def create_app() -> FastAPI:
         """Deep health probe used by the service watchdog AND any external
         monitor. Returns ok=False (HTTP still 200) if any essential
         subsystem looks unhealthy. Don't gate on auth — the loopback
-        watchdog needs to call this without a session cookie."""
-        from arclap_station.camera.adapter import get_adapter  # noqa: PLC0415
+        watchdog needs to call this without a session cookie.
+
+        IMPORTANT: this endpoint must return in well under 1s even when
+        the camera is unplugged. We therefore consult the health BEACON
+        (a cross-process file written by camera ops) instead of opening
+        a libgphoto2 handle. The service watchdog calls /api/health on a
+        tight loop; making it touch the camera was a v0.5 regression
+        that pushed every call to ~12s.
+        """
+        from arclap_station.camera import health as _ch  # noqa: PLC0415
         from arclap_station.db import get_db as _gdb  # noqa: PLC0415
         from arclap_station.telemetry.metrics import snapshot as _snap  # noqa: PLC0415
         from arclap_station.uploaders.queue import get_queue as _gq  # noqa: PLC0415
@@ -109,11 +140,8 @@ def create_app() -> FastAPI:
                 c.execute("SELECT 1").fetchone()
         except Exception:  # noqa: BLE001
             db_ok = False
-        cam_detected = False
-        try:
-            cam_detected = bool(get_adapter().detect().detected)
-        except Exception:  # noqa: BLE001
-            cam_detected = False
+        # Camera state from the beacon — non-blocking, microsecond cost.
+        cam_detected = _ch.is_fresh_and_ok()
         try:
             queue_depth = _gq().pending_depth()
         except Exception:  # noqa: BLE001
