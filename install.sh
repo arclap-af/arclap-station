@@ -354,9 +354,12 @@ fetch_release() {
   warn "Pre-built artifacts missing — building from source."
   info "Adds ~3 min on a Pi 5: clone, pip wheel, npm build."
 
-  # Pull in build deps not in the base list.
+  # Pull in build deps not in the base list. Rust + cargo are needed
+  # because several pinned C-extension deps (pydantic-core, bcrypt's
+  # backend, cryptography) only ship wheels up to cp313 — on bleeding-edge
+  # Pythons (3.14+) pip falls back to source builds that need rustc.
   export DEBIAN_FRONTEND=noninteractive
-  local build_deps=(git build-essential nodejs npm)
+  local build_deps=(git build-essential nodejs npm rustc cargo pkg-config)
   apt-get install -y --no-install-recommends "${build_deps[@]}" \
       || die "Could not install source-build deps (${build_deps[*]})"
 

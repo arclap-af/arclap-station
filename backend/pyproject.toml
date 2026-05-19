@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Arclap Station — on-device control plane for Raspberry Pi 5 tethered to a DSLR."
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11"
 authors = [{ name = "Arclap AG", email = "engineering@arclap.ch" }]
 keywords = ["arclap", "dslr", "raspberry-pi", "gphoto2", "timelapse"]
 classifiers = [
