@@ -175,6 +175,7 @@ install_apt_deps() {
     python3
     python3-venv
     python3-pip
+    python3-dev
     usbutils
     ntpsec
     curl
@@ -465,9 +466,15 @@ install_backend() {
   # NOT pass --quiet here — installing ~80 packages on a fresh Pi 5
   # takes 5+ minutes, and a quiet pip leaves the operator wondering
   # whether the installer is stuck. Real-time progress is worth the noise.
+  #
+  # PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1: belt-and-braces. If any
+  # transitive dep still pulls in an old PyO3 (<0.23) on Python ≥3.14,
+  # this env var bypasses PyO3's interpreter-version refusal and uses
+  # the stable ABI for forward compat. Harmless when not needed.
   local wheel
   wheel="$(arclap_wheel_path)"
-  "${venv}/bin/pip" install --upgrade --force-reinstall "${wheel}"
+  PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 \
+    "${venv}/bin/pip" install --upgrade --force-reinstall "${wheel}"
   ok "Installed $(basename "${wheel}") into venv"
 
   # CLI shim — single shared name regardless of internal naming.
