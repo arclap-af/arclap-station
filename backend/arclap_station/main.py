@@ -166,6 +166,10 @@ def cli(argv: list[str] | None = None) -> int:
         "retention-sweep",
         help="enforce disk-retention policy (intended for the systemd timer)",
     )
+    sub.add_parser(
+        "exif-backfill",
+        help="re-extract EXIF + dimensions for photos that lack them",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "serve"
@@ -183,6 +187,9 @@ def cli(argv: list[str] | None = None) -> int:
         from arclap_station.retention.policy import run as run_retention  # noqa: PLC0415
 
         return run_retention()
+
+    if cmd == "exif-backfill":
+        return _exif_backfill()
 
     if cmd == "healthcheck":
         import httpx  # noqa: PLC0415
@@ -210,6 +217,49 @@ def cli(argv: list[str] | None = None) -> int:
         port=port,
         reload=args.reload,
         log_level=args.log_level,
+    )
+    return 0
+
+
+def _exif_backfill() -> int:
+    """Re-read EXIF + dimensions for every photo missing them.
+
+    Useful after upgrading from pre-v0.4 builds where scheduled captures
+    skipped the EXIF extraction path. Idempotent — safe to run repeatedly.
+    """
+    import json as _json  # noqa: PLC0415
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from arclap_station.db import get_db  # noqa: PLC0415
+    from arclap_station.photos.exif import extract_exif  # noqa: PLC0415
+
+    db = get_db()
+    updated = 0
+    skipped = 0
+    missing = 0
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, path FROM photos "
+            "WHERE exif_json IS NULL OR width IS NULL OR height IS NULL"
+        ).fetchall()
+    for r in rows:
+        p = _Path(r["path"])
+        if not p.exists():
+            missing += 1
+            continue
+        exif, w, h = extract_exif(p)
+        if not exif and w is None and h is None:
+            skipped += 1
+            continue
+        with db.tx() as conn:
+            conn.execute(
+                "UPDATE photos SET exif_json=?, width=?, height=? WHERE id=?",
+                (_json.dumps(exif) if exif else None, w, h, int(r["id"])),
+            )
+        updated += 1
+    print(
+        f"exif-backfill: updated={updated} skipped={skipped} "
+        f"missing_files={missing} total_seen={len(rows)}"
     )
     return 0
 

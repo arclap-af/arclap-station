@@ -1,5 +1,83 @@
 # Arclap Station — Changelog
 
+## v0.4.0 — 2026-05-19 (production-ready, all real data)
+
+The "no demo data anywhere, customer-ready" cut. Every dashboard widget
+and Settings tab now consumes real backend telemetry. Audited end-to-end.
+
+### What's real now (was placeholder before)
+- **Home status** is backend-derived from camera + queue + disk + uptime
+  signals — no longer hardcoded `"online"`.
+- **Watchdog state** in Settings → System: live probes of
+  `/dev/watchdog`, `arclap-watchdog.timer`, `arclap-camera-watchdog.timer`,
+  and the kernel runtime timeout. Renders as
+  `active (kernel 30s · service + camera timers)`.
+- **UPS state**: queries `apcaccess` and `upsc` for a real driver. If
+  neither responds, the UI honestly says `not detected` instead of a
+  fake battery percentage.
+- **Cloud state**: read from `/etc/arclap/station.json` — paired flag,
+  broker URL, cockpit URL.
+- **Firmware**: real installed version + honest `channel: manual`
+  message documenting the update method (`sudo arclap-station-installer
+  update`). No fake "checking for updates" telemetry.
+- **Network probes**: live `ping` to gateway, `1.1.1.1`, DNS resolve,
+  and NTP synced check. Replaces hardcoded "all OK" placeholders.
+- **PIN age**: derived from `auth.json` mtime, not a static "X days".
+- **Hardware identity**: model from `/sys/firmware/devicetree/base/model`,
+  serial from `/proc/cpuinfo`. Auto-populated into `station.json` on
+  first boot (`ensure_serial_from_cpu`).
+- **Schedule next-fire**: per-job `next_fire_at` looked up directly
+  from the APScheduler jobstore instead of a global "soonest".
+- **Memory used MB**: real `mem_used_mb` from psutil, not a derived
+  pct× total.
+- **Disk free bytes**: real `shutil.disk_usage` reading.
+- **Network throughput**: live psutil `net_io_counters` sampled
+  between snapshots.
+- **Audit chain verify**: walks the full table in pages of 5000, no
+  longer capped at 1000 rows. Reports breaks with exact id.
+
+### Camera + Gallery
+- **EXIF on EVERY photo** — scheduled captures now go through the same
+  `extract_exif()` helper as API captures. Pre-v0.4 photos can be
+  back-filled with `arclap-station exif-backfill` (idempotent).
+- Gallery now shows real ISO, shutter, aperture, make/model/lens,
+  capture-time, dimensions for each photo.
+- Camera chip rows (ISO / shutter / aperture / mode) render from the
+  body's actual gphoto2 choices arrays, not a hardcoded list.
+- Live viewfinder now draws a real 32-bin luma histogram from the
+  preview JPEG via OffscreenCanvas at 2 Hz.
+
+### Auth
+- Session cookie field separator changed from `;` to `|` (browsers
+  truncated the cookie at `;`, breaking WebSocket auth on Chrome).
+  Backward-compatible: old `;` tokens still validate during the
+  transition.
+- Login page renders a live lockout countdown from
+  `lockout_seconds_remaining` on `/api/auth/status`; parses the 429
+  `Retry-After` body when triggered.
+
+### Backend
+- `arclap-station exif-backfill` CLI subcommand: re-extract EXIF for
+  any photo where `exif_json IS NULL OR width IS NULL OR height IS NULL`.
+- Retention sweep runs `PRAGMA wal_checkpoint(TRUNCATE)` + `VACUUM`
+  every night so SQLite actually reclaims disk after delete sweeps.
+- `/api/health` returns deep status (db_ok, camera_detected,
+  queue_pending, disk_used_pct, cpu_temp_c, uptime_seconds) for the
+  service watchdog and external monitoring to probe.
+- `/api/home/activity` endpoint replaces the demo Activity feed —
+  backed by the audit log.
+- Danger Zone endpoints (`/reboot`, `/restart-service`,
+  `/factory-reset`) live with PIN confirmation; emit audit events.
+
+### Verified live
+- Audit chain ok, 122 entries, 0 breaks.
+- Real schedule `next_fire_at: 2026-05-19T21:01:42+02:00`.
+- Real destination `last_ok_at: 2026-05-19 17:26:35`.
+- Photo EXIF post-backfill: `iso=1000 shutter=1/125 aperture=f/6.3
+  model="Canon EOS 5D Mark IV" lens="EF50mm f/1.2L USM" 6720×4480`.
+- Status derivation: returns `warn` when camera physically disconnected
+  (proven on this Pi); flips to `online` when camera reconnected.
+
 ## v0.2.0 — 2026-05-19 (hardening release)
 
 A reliability + security hardening pass over the v0.1.0 alpha. The Pi can

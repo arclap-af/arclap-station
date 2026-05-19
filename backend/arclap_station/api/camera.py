@@ -12,6 +12,7 @@ from arclap_station.api.deps import require_session
 from arclap_station.audit import emit as audit_emit
 from arclap_station.camera.adapter import get_adapter
 from arclap_station.camera.stream import serve_preview_ws
+from arclap_station.photos.exif import extract_exif
 from arclap_station.photos.store import get_store
 from arclap_station.uploaders.queue import get_queue
 
@@ -77,7 +78,7 @@ async def capture(
 
     # Extract EXIF — ISO / shutter / aperture / dimensions — so the Gallery
     # can show real settings per photo instead of "—".
-    exif, width, height = _extract_exif(photo_path)
+    exif, width, height = extract_exif(photo_path)
     record = get_store().register(photo_path, exif=exif, width=width, height=height)
     audit_emit(
         "user",
@@ -97,73 +98,6 @@ async def capture(
         if dest_ids:
             get_queue().enqueue(record.id, dest_ids)
     return record.to_dict()
-
-
-def _extract_exif(path: Path) -> tuple[dict[str, Any], int | None, int | None]:
-    """Best-effort EXIF read using Pillow. Returns (exif_dict, w, h).
-
-    Failure modes (Pillow missing, file not an image, no EXIF tags) all
-    return {}, None, None. Never raises — capture itself already succeeded.
-    """
-    try:
-        from PIL import ExifTags, Image  # noqa: PLC0415
-    except Exception:  # noqa: BLE001
-        return {}, None, None
-    try:
-        with Image.open(str(path)) as img:
-            w, h = img.size
-            raw = getattr(img, "_getexif", lambda: None)() or {}
-    except Exception:  # noqa: BLE001
-        return {}, None, None
-    tags = {ExifTags.TAGS.get(k, str(k)): v for k, v in raw.items()}
-    out: dict[str, Any] = {}
-    # ISO can show up under either tag name.
-    iso = tags.get("ISOSpeedRatings") or tags.get("PhotographicSensitivity")
-    if iso is not None:
-        try:
-            out["iso"] = int(iso if not isinstance(iso, tuple | list) else iso[0])
-        except (TypeError, ValueError):
-            pass
-    # Shutter — ExposureTime is a Fraction-like (num, den).
-    exp = tags.get("ExposureTime")
-    if exp is not None:
-        try:
-            if isinstance(exp, tuple) and len(exp) == 2 and exp[1]:
-                out["shutter"] = f"{exp[0]}/{exp[1]}" if exp[0] < exp[1] else f"{exp[0] / exp[1]:.1f}"
-            elif hasattr(exp, "numerator"):
-                out["shutter"] = (
-                    f"{exp.numerator}/{exp.denominator}"
-                    if exp.numerator < exp.denominator
-                    else f"{float(exp):.1f}"
-                )
-            else:
-                v = float(exp)
-                out["shutter"] = f"1/{int(round(1 / v))}" if v < 1 else f"{v:.1f}"
-        except (TypeError, ValueError, ZeroDivisionError):
-            pass
-    # Aperture — FNumber is float-like.
-    fno = tags.get("FNumber") or tags.get("ApertureValue")
-    if fno is not None:
-        try:
-            if isinstance(fno, tuple) and len(fno) == 2 and fno[1]:
-                f = fno[0] / fno[1]
-            elif hasattr(fno, "numerator"):
-                f = float(fno)
-            else:
-                f = float(fno)
-            out["aperture"] = f"f/{f:.1f}"
-        except (TypeError, ValueError, ZeroDivisionError):
-            pass
-    # Camera identity (useful for the Gallery side panel).
-    if tags.get("Make"):
-        out["make"] = str(tags["Make"]).strip()
-    if tags.get("Model"):
-        out["model"] = str(tags["Model"]).strip()
-    if tags.get("LensModel"):
-        out["lens"] = str(tags["LensModel"]).strip()
-    if tags.get("DateTimeOriginal"):
-        out["taken_at"] = str(tags["DateTimeOriginal"]).strip()
-    return out, w, h
 
 
 @router.get("/properties")

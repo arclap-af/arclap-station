@@ -22,6 +22,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from arclap_station.camera.adapter import get_adapter
 from arclap_station.config import get_settings
 from arclap_station.db import Database, get_db
+from arclap_station.photos.exif import extract_exif
 from arclap_station.photos.store import PhotoStore, get_store
 from arclap_station.scheduler.rules import list_destination_ids, should_skip
 from arclap_station.uploaders.queue import UploadQueue, get_queue
@@ -123,12 +124,25 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
         return {"ok": False, "skipped": True, "reason": "no_camera"}
 
     photo_path = adapter.capture()
+    # Same EXIF extraction as /api/camera/capture — so scheduled photos
+    # carry ISO/shutter/aperture/dimensions in the Gallery instead of
+    # showing "—" because they took a different code path to disk.
+    exif, width, height = extract_exif(photo_path)
     store = get_store()
-    record = store.register(photo_path, job_id=schedule_id)
+    record = store.register(
+        photo_path, exif=exif, width=width, height=height, job_id=schedule_id
+    )
     dest_ids = list_destination_ids(sched.dest_filter)
     if dest_ids:
         get_queue().enqueue(record.id, dest_ids)
-    return {"ok": True, "photo_id": record.id, "destinations": len(dest_ids)}
+    return {
+        "ok": True,
+        "photo_id": record.id,
+        "destinations": len(dest_ids),
+        "iso": exif.get("iso") if exif else None,
+        "shutter": exif.get("shutter") if exif else None,
+        "aperture": exif.get("aperture") if exif else None,
+    }
 
 
 class ScheduleEngine:
