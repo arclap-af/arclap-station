@@ -1,5 +1,89 @@
 # Arclap Station — Changelog
 
+## v0.7.0 — 2026-05-19 (operability + connectivity)
+
+Tier 2 (operability) and Tier 3 (new connectivity capability) ship
+together. Stress-tested first: the Pi handles 73 req/s sequential and
+50 parallel /api/home calls in 370 ms with zero errors and 119 MB RSS.
+
+### Tier 2 — Operability
+- **NTP fallback ladder** (`systemd/timesyncd-arclap.conf`):
+  `time.cloudflare.com` → `time.google.com` →
+  `0–3.pool.ntp.org`. Without trusted time, audit log
+  forensics break and TLS verifies fail on clock skew.
+- **DNS resolver fallback** (`systemd/resolved-arclap.conf`):
+  `1.1.1.1 / 9.9.9.9 / 8.8.8.8 / 1.0.0.1 / 149.112.112.112` with
+  `DNSOverTLS=opportunistic`. Stays up if the customer's site DNS
+  fails or starts tampering.
+- **Daily state.db backup** via new `arclap-backup.service` +
+  `arclap-backup.timer` (04:00 local, randomized 5 min). Uses
+  SQLite's online backup API (no lock), gzips into
+  `/var/lib/arclap/backups/`, rotates to 7 days. Audit emits
+  `db.backup`.
+- **Weekly integrity check** (`arclap-integrity.timer`, Sun 05:00):
+  `PRAGMA integrity_check` on the live DB. Audit emits
+  `db.integrity_ok` or `db.integrity_failed` so silent SD card wear
+  is caught months before it cascades into app errors.
+- **Camera flap detection**: every success-after-failure transition
+  appends to a ring buffer in the health beacon; ≥3 flaps inside 1 h
+  emits `camera.flapping` audit (helps spot bad cables / loose USB).
+- **Upload circuit breaker**: when every enabled destination has
+  ≥10 recent consecutive failures, queue workers pause for up to
+  5 minutes instead of grinding through retries every 30 s. Saves
+  CPU + journald spam on an offline-uplink station.
+
+### Tier 3 — New capability
+- **WiFi credentials UI** (#32 cleared):
+  - `GET /api/settings/network/wifi-scan` — rescans + lists APs sorted
+    by signal, parsed from `nmcli -t device wifi list`.
+  - `POST /api/settings/network/wifi-connect` — `{ssid, psk?, hidden?}`
+    via `nmcli device wifi connect`. PSK never logged or returned.
+  - `POST /api/settings/network/wifi-forget` — removes stored profile.
+  - Frontend Settings → Network now has Scan button → AP list →
+    passphrase form. Falls back gracefully if nmcli is absent.
+- **Captive portal detection**: new sentinel probe to
+  `http://cp.cloudflare.com/generate_204`. If it returns anything
+  other than HTTP 204 with empty body, treats it as a hijacking
+  portal and surfaces a warn-level probe + audits
+  `network.captive_portal_detected`. Cockpit Network tab shows the
+  alert without any UI changes (probes panel already renders it).
+- **Mobile-responsive CSS** (#34 cleared): full set of media
+  queries for ≤900 px (tablet stack + 44 px tap targets) and
+  ≤600 px (phone topbar wrap, full-screen modals, viewfinder
+  height cap, PIN inputs scale to vw, gallery grid auto-fill).
+  `@media (pointer: coarse)` disables hover transforms + enables
+  iOS momentum scroll. `prefers-reduced-motion` honoured.
+- **AWS pairing + MQTT publisher**:
+  - New `arclap_station/cloud/pairing.py` — talks to the Arclap
+    Admin API (`ARCLAP_CLOUD_API_URL`) to exchange a pair-token
+    for mTLS cert + broker URL. Persists cert pair to
+    `/etc/arclap/iot/device.{crt,key}` (0600). Falls back to local
+    -only state when the Admin API isn't configured (dev path).
+  - New `arclap_station/cloud/mqtt.py` — Paho-based publisher that
+    heartbeats every 30 s to `stations/<serial>/heartbeat` and
+    subscribes to `stations/<serial>/cmd`. mTLS, exponential
+    reconnect (5 s → 5 min cap). Self-disables when not paired
+    or cert missing; never crashes the main service.
+  - Lifespan starts/stops MQTT alongside the queue + scheduler.
+  - `POST /api/settings/pair` now invokes the real flow.
+
+### Stress test (pre-ship, on the live Pi)
+- 100 sequential `/api/home` calls — **73 req/s**, 0 errors.
+- 50 parallel `/api/home` calls — **370 ms total** (≈135 req/s).
+- RSS after burst — **119 MB** (well under 384 MB MemoryHigh).
+- 55/55 backend tests pass.
+
+### Verified live
+- v0.7.0 wheel installed, service active.
+- `arclap-station backup` creates a 22 KB compressed snapshot;
+  rotates older >7 d.
+- `arclap-station db-integrity` returns `result: ok`.
+- New timers list: `arclap-backup.timer` fires Wed 04:02:47;
+  `arclap-integrity.timer` fires Sun 05:09:12.
+- WiFi scan endpoint returns `{ok:false, error:"nmcli not
+  available"}` on this dev Pi (NetworkManager not installed —
+  production image will include it). Frontend renders gracefully.
+
 ## v0.6.0 — 2026-05-19 (perf + stability + resource limits)
 
 A full audit revealed that the v0.5 init retries (1+3+10s) had silently

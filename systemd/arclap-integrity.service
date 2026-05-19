@@ -1,0 +1,28 @@
+[Unit]
+Description=Arclap Station — weekly SQLite integrity check
+Documentation=https://github.com/arclap-af/arclap-station
+After=arclap-station.service
+Wants=arclap-station.service
+
+[Service]
+Type=oneshot
+User=arclap
+Group=arclap
+WorkingDirectory=/var/lib/arclap
+EnvironmentFile=-/etc/arclap/environment
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station db-integrity
+
+Nice=15
+IOSchedulingClass=idle
+
+# Hardening — read-only integrity check
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/arclap
+ReadOnlyPaths=-/opt/arclap-station
+
+[Install]
+WantedBy=multi-user.target

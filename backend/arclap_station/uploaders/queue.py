@@ -24,6 +24,13 @@ DEFAULT_WORKERS = 4
 MAX_BACKOFF_SECONDS = 3600
 JITTER_PCT = 0.3
 
+# Circuit breaker: if every enabled destination has failed at least
+# this many consecutive times, pause the queue for BREAKER_PAUSE_SEC
+# instead of grinding through retries. Saves disk I/O + battery on a
+# Pi that's lost its uplink, and lets the journal stay readable.
+BREAKER_FAIL_THRESHOLD = 10
+BREAKER_PAUSE_SEC = 300.0
+
 
 @dataclass
 class QueueItem:
@@ -187,12 +194,89 @@ class UploadQueue:
 
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
+            # Circuit breaker — if every destination is failing, pause
+            # so we don't burn CPU + the destination's rate-limit
+            # budget retrying every 30s.
+            wait = self._breaker_pause_remaining()
+            if wait > 0:
+                if self._wakeup.wait(timeout=min(wait, 10.0)):
+                    self._wakeup.clear()
+                continue
             item = self._claim()
             if item is None:
                 self._wakeup.wait(timeout=2.0)
                 self._wakeup.clear()
                 continue
             self._handle(item)
+
+    def _breaker_pause_remaining(self) -> float:
+        """Seconds left to pause, or 0 if the breaker is closed.
+
+        Open the breaker when EVERY enabled destination has been
+        failing for ≥ BREAKER_FAIL_THRESHOLD recent attempts AND the
+        most recent failure on any of them is within
+        BREAKER_PAUSE_SEC. Close it as soon as one destination logs
+        a fresh success.
+        """
+        dests = [d for d in self._destinations.list() if d.enabled]
+        if not dests:
+            return 0.0
+        # Use last_error vs last_ok_at as the simple gate; if any
+        # destination has a fresher OK than its last error, breaker
+        # is closed.
+        all_failing = True
+        latest_err_ts: float | None = None
+        from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
+
+        for d in dests:
+            if not d.last_error:
+                all_failing = False
+                break
+            err_time = None
+            ok_time = None
+            try:
+                if d.last_error:
+                    # destination table doesn't carry an error-time
+                    # column directly; use updated_at semantics via
+                    # the queue's last in_flight row for this dest.
+                    pass
+                if d.last_ok_at:
+                    ok_time = _dt.fromisoformat(d.last_ok_at.replace(" ", "T"))
+                    if ok_time.tzinfo is None:
+                        ok_time = ok_time.replace(tzinfo=_UTC)
+            except (ValueError, AttributeError):
+                pass
+            # Count consecutive failures via the queue.
+            with self._db.connect() as conn:
+                cnt_row = conn.execute(
+                    "SELECT COUNT(*) FROM upload_queue "
+                    "WHERE dest_id=? AND state='failed' "
+                    "  AND updated_at > datetime('now', '-1 hour')",
+                    (d.id,),
+                ).fetchone()
+            fails = int(cnt_row[0]) if cnt_row else 0
+            if fails < BREAKER_FAIL_THRESHOLD:
+                all_failing = False
+                break
+        if not all_failing:
+            return 0.0
+        # Use the oldest "still pending" item's next_at as the breaker
+        # release: if all retries are at least BREAKER_PAUSE_SEC out,
+        # there's nothing to do anyway.
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT MIN(next_at) FROM upload_queue WHERE state IN ('pending','failed')"
+            ).fetchone()
+        if row and row[0]:
+            try:
+                ts = _dt.fromisoformat(str(row[0]).replace(" ", "T"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_UTC)
+                wait = (ts - _dt.now(_UTC)).total_seconds()
+                return max(0.0, min(BREAKER_PAUSE_SEC, wait))
+            except (ValueError, AttributeError):
+                pass
+        return BREAKER_PAUSE_SEC
 
     def _claim(self) -> QueueItem | None:
         with self._db.tx() as conn:

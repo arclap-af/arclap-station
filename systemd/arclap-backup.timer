@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily Arclap Station state.db backup
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Timer]
+# 04:00 local — after the retention sweep (03:00) so the DB is
+# already compacted by VACUUM when we snapshot it.
+OnCalendar=*-*-* 04:00:00
+# If the Pi was off at 04:00 (booted up mid-day), still run the backup.
+Persistent=true
+# Add a small randomized delay so a fleet of stations doesn't all
+# hammer their SD cards at the same second.
+RandomizedDelaySec=300
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

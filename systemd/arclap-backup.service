@@ -1,0 +1,29 @@
+[Unit]
+Description=Arclap Station — daily state.db backup
+Documentation=https://github.com/arclap-af/arclap-station
+After=arclap-station.service
+Wants=arclap-station.service
+
+[Service]
+Type=oneshot
+User=arclap
+Group=arclap
+WorkingDirectory=/var/lib/arclap
+EnvironmentFile=-/etc/arclap/environment
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station backup
+
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hardening — backup only needs to read state.db and write to backups/
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/arclap
+ReadOnlyPaths=-/opt/arclap-station
+
+[Install]
+WantedBy=multi-user.target

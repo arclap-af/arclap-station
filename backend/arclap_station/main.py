@@ -57,6 +57,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     queue = get_queue()
     queue.start()
 
+    # MQTT publisher — no-op if station isn't paired or cert is missing.
+    try:
+        from arclap_station.cloud.mqtt import get_publisher  # noqa: PLC0415
+
+        mqtt = get_publisher()
+        mqtt.start()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mqtt start skipped: %s", exc)
+        mqtt = None
+
     # Periodic WAL checkpoint — without this the -wal sidecar grows
     # unbounded between retention sweeps (we saw 4 MB after a few hours).
     # PASSIVE mode never blocks writers; we don't need TRUNCATE here
@@ -80,6 +90,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
             await wal_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        try:
+            if mqtt is not None:
+                mqtt.stop()
+        except Exception:  # noqa: BLE001
             pass
         try:
             queue.stop()
@@ -198,6 +213,14 @@ def cli(argv: list[str] | None = None) -> int:
         "exif-backfill",
         help="re-extract EXIF + dimensions for photos that lack them",
     )
+    sub.add_parser(
+        "backup",
+        help="take a compressed snapshot of state.db (intended for daily timer)",
+    )
+    sub.add_parser(
+        "db-integrity",
+        help="run PRAGMA integrity_check on state.db (intended for weekly timer)",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "serve"
@@ -218,6 +241,16 @@ def cli(argv: list[str] | None = None) -> int:
 
     if cmd == "exif-backfill":
         return _exif_backfill()
+
+    if cmd == "backup":
+        from arclap_station.backup import run_backup  # noqa: PLC0415
+
+        return run_backup()
+
+    if cmd == "db-integrity":
+        from arclap_station.backup import run_integrity  # noqa: PLC0415
+
+        return run_integrity()
 
     if cmd == "healthcheck":
         import httpx  # noqa: PLC0415

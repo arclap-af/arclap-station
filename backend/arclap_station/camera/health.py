@@ -77,15 +77,22 @@ def _now_iso() -> str:
 
 
 def write_ok(model: str | None) -> None:
-    """Record a successful camera op."""
+    """Record a successful camera op.
+
+    Also tracks "flap" events — every transition from failure → ok is
+    appended to a small ring buffer. If we observe N flips inside the
+    flap window, we emit an audit alert so an operator knows the cable,
+    connector, or USB bus is unstable (not the camera firmware).
+    """
     payload = _read()
+    was_failing = (payload.get("ok") is False)
     payload.update({
         "ok": True,
         "last_ok_at": _now_iso(),
         "model": model or payload.get("model"),
-        # Leave last_error / last_error_at alone — operators want to
-        # see the most recent error even after a recovery.
     })
+    if was_failing:
+        _record_flap(payload)
     _write(payload)
 
 
@@ -98,6 +105,60 @@ def write_failure(err: str) -> None:
         "last_error_at": _now_iso(),
     })
     _write(payload)
+
+
+# ----- flap detection ----------------------------------------------------
+
+# More than FLAP_THRESHOLD recoveries inside FLAP_WINDOW_SEC = "flapping".
+FLAP_THRESHOLD = 3
+FLAP_WINDOW_SEC = 3600.0
+
+
+def _record_flap(payload: dict[str, Any]) -> None:
+    """Append a recovery event to the flap ring buffer.
+
+    Emits `camera.flapping` (audit) when threshold is hit so the
+    cockpit and any external monitor can surface "check cable /
+    power" instead of letting the operator stare at a re-establishing
+    PTP session every few minutes.
+    """
+    flaps: list[str] = list(payload.get("recoveries", []))
+    flaps.append(_now_iso())
+    # Trim entries older than the window.
+    cutoff = datetime.now(UTC) - _timedelta_sec(FLAP_WINDOW_SEC)
+    pruned: list[str] = []
+    for ts in flaps[-32:]:  # cap memory
+        try:
+            if datetime.fromisoformat(ts) >= cutoff:
+                pruned.append(ts)
+        except (ValueError, TypeError):
+            continue
+    payload["recoveries"] = pruned
+    if len(pruned) >= FLAP_THRESHOLD:
+        try:
+            from arclap_station.audit import emit as _audit  # noqa: PLC0415
+
+            _audit(
+                "system",
+                "camera.flapping",
+                {
+                    "recoveries_in_window": len(pruned),
+                    "window_sec": int(FLAP_WINDOW_SEC),
+                    "first_at": pruned[0],
+                    "latest_at": pruned[-1],
+                },
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("camera.flapping audit emit failed", exc_info=True)
+        # Reset the ring after alerting so we don't spam the audit
+        # log every recovery once we're past threshold.
+        payload["recoveries"] = []
+
+
+def _timedelta_sec(s: float):  # noqa: ANN202 (return type irrelevant)
+    from datetime import timedelta  # noqa: PLC0415
+
+    return timedelta(seconds=s)
 
 
 def write_reset() -> None:

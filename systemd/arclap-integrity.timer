@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly SQLite integrity check for Arclap Station
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Timer]
+# Sunday 05:00 local — after Sunday's backup completes.
+OnCalendar=Sun *-*-* 05:00:00
+Persistent=true
+RandomizedDelaySec=600
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

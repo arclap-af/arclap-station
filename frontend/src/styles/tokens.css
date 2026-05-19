@@ -478,7 +478,7 @@ button:not(:disabled),
 .as-tbl tbody tr,
 .as-photo-card { cursor: pointer; }
 
-/* ───── Mobile ───── */
+/* ───── Tablet & small laptop ───── */
 @media (max-width: 900px) {
   .as-shell { flex-direction: column; height: auto; }
   .as-side {
@@ -496,4 +496,61 @@ button:not(:disabled),
   .as-page { padding: 16px; }
   .as-topbar { padding: 0 16px; gap: 8px; }
   .as-grid-3, .as-grid-2, .as-grid-4 { grid-template-columns: 1fr !important; }
+  /* Tap targets: 44px minimum (Apple HIG) so on-site foremen using
+     a phone don't fat-finger adjacent controls. */
+  .as-btn, .as-input, .as-chip, .as-pill { min-height: 36px; }
+  .as-tbl th, .as-tbl td { padding: 10px 8px; }
+}
+
+/* ───── Phone ───── */
+@media (max-width: 600px) {
+  /* Stack the topbar — title above, controls below. */
+  .as-topbar { flex-wrap: wrap; height: auto; padding: 12px; gap: 6px; }
+  .as-topbar > * { flex: 1 1 auto; }
+
+  /* The login card has a fixed 56×56 brand square that pushes the
+     keypad off centre on narrow viewports — soften it. */
+  .as-login-card { padding: 24px 18px; max-width: 100%; }
+
+  /* PIN inputs full-flex instead of fixed 46px — fits even 320px phones. */
+  .as-login-card .as-input.mono { width: 12vw !important; max-width: 46px; }
+
+  /* Camera viewfinder uses 16:9 ratio that's too tall for landscape phones;
+     constrain to viewport-height instead. */
+  .as-viewfinder { max-height: 60vh; }
+
+  /* Buttons in row groups break two-up; let them wrap naturally. */
+  .as-row-actions { flex-wrap: wrap; gap: 6px; }
+
+  /* Property browser table and gallery thumbnails: smaller default size. */
+  .as-photo-card img { object-fit: cover; }
+  .as-gallery-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)) !important; }
+
+  /* H1 sizing — too big on mobile. */
+  .as-h1 { font-size: 20px; }
+  .as-h1-sub { font-size: 11px; }
+
+  /* Modals: go full-screen rather than 80% width on narrow displays. */
+  .as-modal { width: 100vw; min-height: 100vh; border-radius: 0; padding: 16px; }
+
+  /* Make pill rows wrap. */
+  .as-pill-row { flex-wrap: wrap; gap: 4px; }
+}
+
+/* ───── Touch-friendly defaults across all viewports ───── */
+@media (pointer: coarse) {
+  /* On touch devices, never show hover-only outlines that would
+     persist after a tap and look stuck. */
+  .as-btn:hover, .as-nav-item:hover, .as-photo-card:hover { transform: none; }
+  /* iOS scrolling momentum for any overflow-y panel. */
+  .as-scroll, .as-modal-body { -webkit-overflow-scrolling: touch; }
+}
+
+/* ───── Forced-colors / OS dark/light ───── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

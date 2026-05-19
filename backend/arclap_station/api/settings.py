@@ -253,7 +253,195 @@ def _connectivity_probes() -> list[dict[str, str]]:
         add("NTP synced", synced, "yes" if synced else "no")
     except (FileNotFoundError, subprocess.SubprocessError):
         pass
+    # Captive portal detection — hit a known sentinel URL and confirm
+    # we get the expected payload back. Most public WiFi hijacks 80
+    # to a login page, which would return HTML 200 with different body.
+    portal_state = _captive_portal_probe()
+    if portal_state == "ok":
+        add("No captive portal", True, "direct")
+    elif portal_state == "portal":
+        results.append({
+            "label": "Captive portal",
+            "result": "blocking outbound traffic",
+            "level": "warn",
+        })
+        try:
+            audit_emit("system", "network.captive_portal_detected", {})
+        except Exception:  # noqa: BLE001
+            pass
     return results
+
+
+def _captive_portal_probe() -> str:
+    """Returns 'ok', 'portal', or 'unknown'.
+
+    Uses Cloudflare's tiny generate_204 endpoint — by convention a
+    successful HTTPS-bypassing intermediate returns 204 No Content with
+    an empty body. A captive portal hijack returns a 200 HTML page.
+    """
+    import urllib.request  # noqa: PLC0415
+
+    url = "http://cp.cloudflare.com/generate_204"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "arclap-station/captive-probe"})
+        with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310 (literal URL)
+            if resp.status == 204 and not resp.read(8):
+                return "ok"
+            return "portal"
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return "unknown"
+
+
+# ----- WiFi scan + connect (Tier 3) --------------------------------------
+#
+# We use NetworkManager (`nmcli`) because it's the supported Ubuntu 26.04
+# default and handles WPA2/3 / hidden SSIDs / auto-reconnect for us. The
+# previous "iw" path is read-only; nmcli is read-write.
+#
+# Security: nmcli stores PSKs in /etc/NetworkManager/system-connections
+# with mode 0600 owned by root. We never log the PSK and we never expose
+# it via the API — readback is intentionally one-way.
+
+
+@router.get("/network/wifi-scan")
+async def wifi_scan(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    """Return visible WiFi access points, ordered by signal strength.
+
+    Uses `nmcli -t -f SSID,SIGNAL,SECURITY,FREQ device wifi list`. Triggers
+    a rescan first so the user sees fresh APs after walking around the site.
+    """
+    import subprocess  # noqa: PLC0415
+
+    try:
+        subprocess.run(
+            ["nmcli", "device", "wifi", "rescan"],
+            capture_output=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return {"ok": False, "error": "nmcli not available", "networks": []}
+    try:
+        out = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ,IN-USE",
+             "device", "wifi", "list"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        return {"ok": False, "error": str(exc), "networks": []}
+    networks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in out.stdout.splitlines():
+        # nmcli -t output is colon-separated; SSIDs may contain
+        # escaped colons (\:) — we want to preserve those.
+        parts: list[str] = []
+        buf = ""
+        i = 0
+        while i < len(line):
+            if line[i] == "\\" and i + 1 < len(line):
+                buf += line[i + 1]
+                i += 2
+            elif line[i] == ":":
+                parts.append(buf)
+                buf = ""
+                i += 1
+            else:
+                buf += line[i]
+                i += 1
+        parts.append(buf)
+        if len(parts) < 4:
+            continue
+        ssid, signal, security, freq = parts[0], parts[1], parts[2], parts[3]
+        in_use = parts[4] if len(parts) >= 5 else ""
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        try:
+            sig = int(signal)
+        except ValueError:
+            sig = 0
+        try:
+            freq_mhz = int(freq)
+        except ValueError:
+            freq_mhz = 0
+        band = (
+            "2.4 GHz" if freq_mhz < 3000
+            else "5 GHz" if freq_mhz < 6000
+            else "6 GHz"
+        )
+        networks.append({
+            "ssid": ssid,
+            "signal": sig,
+            "security": security or "OPEN",
+            "band": band,
+            "in_use": bool(in_use.strip() == "*"),
+        })
+    networks.sort(key=lambda n: -n["signal"])
+    return {"ok": True, "networks": networks}
+
+
+class WifiConnectRequest(BaseModel):
+    ssid: str
+    psk: str | None = None
+    hidden: bool = False
+
+
+@router.post("/network/wifi-connect")
+async def wifi_connect(
+    payload: WifiConnectRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Connect (or replace existing connection) to a WiFi network.
+
+    nmcli stores the PSK encrypted under /etc/NetworkManager — we never
+    persist it server-side and never log it. Audit emit logs only the
+    SSID, never the secret.
+    """
+    import subprocess  # noqa: PLC0415
+
+    ssid = payload.ssid.strip()
+    if not ssid:
+        raise HTTPException(status_code=400, detail="ssid required")
+    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+    if payload.psk:
+        cmd += ["password", payload.psk]
+    if payload.hidden:
+        cmd += ["hidden", "yes"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        audit_emit("user", "network.wifi_connect_error", {"ssid": ssid, "err": str(exc)})
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if out.returncode != 0:
+        # Strip the password echo from stderr if nmcli accidentally
+        # included it — never log secrets.
+        err = (out.stderr or out.stdout).strip()
+        audit_emit("user", "network.wifi_connect_failed", {"ssid": ssid, "err": err[:200]})
+        raise HTTPException(status_code=400, detail=err or "connect failed")
+    audit_emit("user", "network.wifi_connected", {"ssid": ssid, "hidden": payload.hidden})
+    return {"ok": True, "ssid": ssid}
+
+
+@router.post("/network/wifi-forget")
+async def wifi_forget(
+    payload: WifiConnectRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Delete a stored WiFi profile so it won't auto-reconnect."""
+    import subprocess  # noqa: PLC0415
+
+    ssid = payload.ssid.strip()
+    if not ssid:
+        raise HTTPException(status_code=400, detail="ssid required")
+    try:
+        out = subprocess.run(
+            ["nmcli", "connection", "delete", ssid],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if out.returncode != 0:
+        raise HTTPException(status_code=400, detail=(out.stderr or "delete failed").strip())
+    audit_emit("user", "network.wifi_forget", {"ssid": ssid})
+    return {"ok": True}
 
 
 @router.get("/security")
@@ -627,22 +815,55 @@ async def logs_ws(ws: WebSocket) -> None:
 
 @router.post("/pair")
 async def pair_now(
-    payload: dict[str, str],
+    payload: dict[str, Any],
     _: dict[str, Any] = Depends(require_session),
 ) -> dict[str, Any]:
-    code = payload.get("pair_code", "").strip()
+    """Exchange a pair-token for mTLS cert + broker URL via the Admin API.
+
+    Falls back to local-only "registered" state if ARCLAP_CLOUD_API_URL
+    isn't set (dev / standalone) — so the cockpit's pairing UX still
+    works during testing without an admin backend.
+    """
+    code = str(payload.get("pair_code", "")).strip()
+    force = bool(payload.get("force", False))
     if not code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="pair_code required")
-    cfg = get_station_store().update(pair_token=code, paired=True)
-    audit_emit("user", "cloud.pair", {"paired": True})
-    return cfg.to_dict()
+    from arclap_station.cloud.pairing import pair as cloud_pair  # noqa: PLC0415
+
+    result = cloud_pair(code, force=force)
+    if result.ok:
+        # Successful AWS pairing — also kick the MQTT publisher.
+        try:
+            from arclap_station.cloud.mqtt import get_publisher  # noqa: PLC0415
+
+            get_publisher().start()
+        except Exception:  # noqa: BLE001
+            pass
+        return result.to_dict()
+    # Cloud API unreachable → fall back to local-only state so the
+    # cockpit doesn't permanently 4xx. We still emit a distinct audit
+    # event so the operator knows pairing wasn't real.
+    if result.error and "ARCLAP_CLOUD_API_URL" in result.error:
+        cfg = get_station_store().update(pair_token=code, paired=True)
+        audit_emit("user", "cloud.pair_local_only", {"paired": True})
+        return {**cfg.to_dict(), "local_only": True, "warning": result.error}
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=result.error or "pair failed")
 
 
 @router.post("/unpair")
 async def unpair(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
-    cfg = get_station_store().update(pair_token=None, paired=False)
+    """Reverse pairing — wipe certs + station.json flags."""
+    from arclap_station.cloud.pairing import unpair as cloud_unpair  # noqa: PLC0415
+
+    result = cloud_unpair()
+    try:
+        from arclap_station.cloud.mqtt import get_publisher  # noqa: PLC0415
+
+        get_publisher().stop()
+    except Exception:  # noqa: BLE001
+        pass
     audit_emit("user", "cloud.unpair", {})
-    return cfg.to_dict()
+    return result.to_dict()
 
 
 # ----- Danger Zone --------------------------------------------------------
