@@ -89,6 +89,114 @@ def verify_chain(db: Database | None = None, page_size: int = 5000) -> dict[str,
     return {"ok": not breaks, "breaks": breaks, "checked": checked}
 
 
+def export_signed(
+    *,
+    start_id: int = 0,
+    end_id: int | None = None,
+    db: Database | None = None,
+) -> dict[str, Any]:
+    """Return a portable, hash-chain-signed export of the audit log.
+
+    Bundle shape:
+        {
+          "station": {"serial": "...", "version": "..."},
+          "generated_at": "<ISO8601>",
+          "range": {"start_id": N, "end_id": M, "count": K},
+          "entries": [...rows in id-asc order...],
+          "chain_ok": true|false,
+          "chain_breaks": [...],
+          "fingerprint": "<sha256 of canonical JSON of entries>",
+          "fingerprint_signed": "<base64 ed25519 sig>"  // present if key configured
+        }
+
+    The fingerprint alone is enough for a third party to detect
+    tampering after the fact (recompute and compare). The signature
+    requires the station's private key (`/etc/arclap/audit-export.key`,
+    Ed25519, written at install time) and elevates the export to
+    cryptographic non-repudiation. Without the key file, we still
+    return the fingerprint.
+    """
+    import base64  # noqa: PLC0415
+    import hashlib  # noqa: PLC0415
+    from datetime import UTC as _UTC, datetime as _dt  # noqa: PLC0415
+
+    from arclap_station import __version__  # noqa: PLC0415
+    from arclap_station.config import get_settings  # noqa: PLC0415
+    from arclap_station.station_config import get_station_store  # noqa: PLC0415
+
+    database = db or get_db()
+    end_clause = ""
+    params: list[Any] = [int(start_id)]
+    if end_id is not None:
+        end_clause = " AND id <= ?"
+        params.append(int(end_id))
+    with database.connect() as conn:
+        rows = conn.execute(
+            f"SELECT id, ts, actor, event, details_json, prev_hash, hash "
+            f"FROM audit_log WHERE id > ?{end_clause} ORDER BY id ASC",
+            params,
+        ).fetchall()
+    entries: list[dict[str, Any]] = []
+    for r in rows:
+        details: Any = None
+        if r["details_json"]:
+            try:
+                details = json.loads(r["details_json"])
+            except json.JSONDecodeError:
+                details = r["details_json"]
+        entries.append({
+            "id": int(r["id"]),
+            "ts": str(r["ts"]),
+            "actor": str(r["actor"]),
+            "event": str(r["event"]),
+            "details": details,
+            "prev_hash": r["prev_hash"],
+            "hash": r["hash"],
+        })
+
+    # Canonical JSON of the entries → fingerprint. Sort keys so the
+    # fingerprint is reproducible across producers.
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    chain = verify_chain(db=database)
+    cfg = get_station_store().load()
+    bundle: dict[str, Any] = {
+        "station": {
+            "serial": cfg.serial,
+            "hostname": cfg.hostname,
+            "version": __version__,
+        },
+        "generated_at": _dt.now(_UTC).isoformat(),
+        "range": {
+            "start_id": int(start_id),
+            "end_id": int(end_id) if end_id is not None else (entries[-1]["id"] if entries else 0),
+            "count": len(entries),
+        },
+        "entries": entries,
+        "chain_ok": chain["ok"],
+        "chain_breaks": chain["breaks"],
+        "fingerprint": fingerprint,
+        "fingerprint_alg": "sha256",
+    }
+
+    # Optional Ed25519 signature over the fingerprint.
+    key_path = get_settings().paths.etc / "audit-export.key"
+    if key_path.exists():
+        try:
+            from cryptography.hazmat.primitives.serialization import (  # noqa: PLC0415
+                load_pem_private_key,
+            )
+
+            key = load_pem_private_key(key_path.read_bytes(), password=None)
+            sig = key.sign(fingerprint.encode("ascii"))
+            bundle["fingerprint_signed"] = base64.b64encode(sig).decode("ascii")
+            bundle["fingerprint_alg"] = "sha256+ed25519"
+        except Exception as exc:  # noqa: BLE001
+            bundle["sign_error"] = str(exc)[:200]
+    return bundle
+
+
 def recent(limit: int = 100, db: Database | None = None) -> list[dict[str, Any]]:
     database = db or get_db()
     with database.connect() as conn:

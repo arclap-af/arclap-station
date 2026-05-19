@@ -64,12 +64,20 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# Intentionally NOT setting ProtectProc=invisible or ProcSubset=pid —
+# psutil reads /proc/loadavg, /proc/meminfo, /proc/stat for telemetry,
+# and those disappear under ProcSubset=pid.
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 LockPersonality=true
 MemoryDenyWriteExecute=false
 SystemCallArchitectures=native
+KeyringMode=private
+UMask=0027
 # @system-service alone blocks clone3 on some aarch64 + glibc combos
 # (bcrypt + cryptography use threadpools). Add @sandbox for safety.
 SystemCallFilter=@system-service @sandbox

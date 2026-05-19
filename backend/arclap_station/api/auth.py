@@ -27,6 +27,9 @@ class StatusResponse(BaseModel):
     logged_in: bool
     pin_set: bool
     lockout_seconds_remaining: int
+    # v0.8: surface PIN age so the cockpit can nag the operator to rotate.
+    pin_age_days: int | None = None
+    pin_rotation_overdue: bool = False
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -87,11 +90,34 @@ async def auth_status(
     ip = get_client_ip(request)
     cookie = request.cookies.get(SESSION_COOKIE)
     sess = auth.validate_session(cookie)
+    pin_age = _pin_age_days_from_disk()
+    rotation_overdue = pin_age is not None and pin_age > 90
     return StatusResponse(
         logged_in=bool(sess),
         pin_set=auth.is_pin_set(),
         lockout_seconds_remaining=auth.lockout_remaining(ip),
+        pin_age_days=pin_age,
+        pin_rotation_overdue=rotation_overdue,
     )
+
+
+def _pin_age_days_from_disk() -> int | None:
+    """Days since the auth.json file was last mtime-touched.
+
+    A change-pin call writes a new file so mtime tracks PIN-set events.
+    Returns None if the file's missing (no PIN set yet)."""
+    import os as _os  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+
+    from arclap_station.config import get_settings  # noqa: PLC0415
+
+    p = get_settings().paths.etc / "auth.json"
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        return None
+    age_days = max(0, int((_time.time() - mtime) / 86400))
+    return age_days
 
 
 class ChangePinRequest(BaseModel):

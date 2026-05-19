@@ -8,6 +8,7 @@ from arclap_station.api.acceptance import router as acceptance_router
 from arclap_station.api.auth import router as auth_router
 from arclap_station.api.camera import router as camera_router
 from arclap_station.api.destinations import router as destinations_router
+from arclap_station.api.diag import router as diag_router
 from arclap_station.api.gallery import router as gallery_router
 from arclap_station.api.home import router as home_router
 from arclap_station.api.queue import router as queue_router
@@ -30,4 +31,5 @@ def build_router() -> APIRouter:
     root.include_router(terminal_router)
     root.include_router(settings_router)
     root.include_router(acceptance_router)
+    root.include_router(diag_router)
     return root

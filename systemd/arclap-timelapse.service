@@ -1,0 +1,32 @@
+[Unit]
+Description=Arclap Station — daily 24h timelapse render
+Documentation=https://github.com/arclap-af/arclap-station
+After=arclap-retention.service
+Wants=arclap-retention.service
+
+[Service]
+Type=oneshot
+User=arclap
+Group=arclap
+WorkingDirectory=/var/lib/arclap
+EnvironmentFile=-/etc/arclap/environment
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station timelapse-daily
+
+# Render is CPU-bound; play nice with capture + upload.
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=50
+MemoryHigh=512M
+MemoryMax=1G
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/arclap /media/sdcard/photos
+ReadOnlyPaths=-/opt/arclap-station
+
+[Install]
+WantedBy=multi-user.target

@@ -792,6 +792,30 @@ async def audit_recent(
     return recent_audit(limit=limit)
 
 
+@router.get("/audit/export")
+async def audit_export(
+    start_id: int = 0,
+    end_id: int | None = None,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Signed export of the audit log for legal / forensic use.
+
+    See arclap_station.audit.export_signed for the bundle schema and
+    signing details (Ed25519 over the SHA-256 fingerprint of canonical
+    JSON of entries). Falls back to fingerprint-only if no signing
+    key is provisioned.
+    """
+    from arclap_station.audit import export_signed  # noqa: PLC0415
+
+    bundle = export_signed(start_id=start_id, end_id=end_id)
+    audit_emit("user", "audit.export", {
+        "start_id": start_id,
+        "end_id": end_id,
+        "count": bundle["range"]["count"],
+    })
+    return bundle
+
+
 @router.websocket("/logs-ws")
 async def logs_ws(ws: WebSocket) -> None:
     from arclap_station.api.deps import require_ws_session  # noqa: PLC0415

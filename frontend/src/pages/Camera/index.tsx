@@ -91,7 +91,27 @@ export function CameraPage() {
               gphoto2 control · viewfinder · {exp.mode} · {exp.shutter}s · {exp.aperture} · ISO {exp.iso}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div className="as-row-actions" style={{ display: "flex", gap: 6 }}>
+            <Button
+              onClick={() => {
+                // Toggle mirror lock-up on Canon bodies. Best-effort:
+                // backend returns 400 if the camera doesn't expose
+                // the path (Nikon naming is different, mirrorless has
+                // no mirror, etc.).
+                fetch("/api/v1/camera/settings", {
+                  method: "PUT",
+                  credentials: "include",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    path: "/main/capturesettings/mirrorlockup",
+                    value: "On",
+                  }),
+                }).then(() => showToast("Mirror lock-up engaged"))
+                  .catch(() => showToast("MLU not supported on this body"));
+              }}
+            >
+              MLU
+            </Button>
             <Button onClick={() => syncClock.mutate()} disabled={syncClock.isPending}>Sync clock</Button>
             <Button onClick={() => usbReset.mutate()} disabled={usbReset.isPending}>USB reset</Button>
             <Button onClick={() => reconnect.mutate()} disabled={reconnect.isPending}>Reconnect</Button>

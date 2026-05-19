@@ -1,5 +1,134 @@
 # Arclap Station — Changelog
 
+## v0.8.0 — 2026-05-19 (overnight: every ★ landed)
+
+A single overnight cut that ships every item I marked ★ across the
+three improvement tracks (Reliability/Observability, Photo asset value,
+Field/connectivity). Verified live on `arclap-st-90107cb4`:
+55/55 tests pass, all 6 timers active, latencies still ≤25 ms.
+
+### Reliability + Observability
+- **Python faulthandler** enabled at startup → writes a full all-threads
+  traceback to `/var/log/arclap/crash-<pid>.txt` on SIGSEGV / SIGFPE /
+  SIGABRT / SIGILL / SIGBUS before the process dies. Currently zero
+  forensic visibility into segfaults; this fixes that.
+- **Sentry crash reporting** wired (opt-in via `SENTRY_DSN` env var) —
+  remote Pis can phone home on uncaught exceptions in seconds instead
+  of waiting for the customer to call.
+- **Prometheus `/metrics`** endpoint with request counter + latency
+  histogram + per-channel system gauges (camera health, queue depth,
+  disk, CPU, memory, audit count). Hand-rolled to keep deps lean
+  (~80 LOC, no `prometheus_client` wheel pulled in).
+- **FastAPI middleware** instruments every request automatically;
+  `/api/diag/percentiles` exposes p50/p95 per endpoint.
+- **Slow-op logger** — anything > 100 ms appended to
+  `/var/log/arclap/slow.log` (size-capped, 5 MB rotation).
+- **Support bundle generator** — `arclap-station support-bundle` writes
+  a redacted .tar.gz with logs, gzipped state.db dump, systemd states,
+  dmesg, lsusb, audit tail. PIN-gated HTTP at
+  `GET /api/diag/support-bundle`. 26 KB on this dev Pi.
+- **Service health dashboard** — `/api/diag/services` returns
+  `is-active`/`is-enabled` for every arclap unit + caddy + ntp + resolved.
+- **SMART readings** — `/api/diag/smart` parses `smartctl -A -j` for
+  the SD card; surfaces honest "smartctl not installed" when absent.
+- **Boot history** — `/api/diag/boot-history` lists last 50 boots
+  with reason heuristic (kernel_panic, watchdog_reset, clean_boot…).
+- **Hardened systemd**: `ProtectClock`, `ProtectHostname`,
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`,
+  `KeyringMode=private`, `UMask=0027`.
+- **Periodic WAL checkpoint** loop already shipped in v0.6, now joined
+  by the new daily SQLite backup (v0.7) + weekly integrity check (v0.7)
+  + the new daily timelapse render and faulthandler init.
+
+### Photo asset value
+- **Pre-rendered timelapse videos (§12.13)** — new
+  `arclap_station/photos/timelapse.py` + `arclap-timelapse.{service,
+  timer}`. Daily 03:30 ffmpeg render of the last 24 h into 1080p
+  H.264 yuv420p MP4. Sub-samples to ≤720 frames (≈30 sec @ 24 fps).
+  Renders are tracked in a new `timelapses` SQLite table; retained 30 d.
+  Schema v3 migration.
+- **Perceptual-hash dedup** — new `arclap_station/photos/dedup.py`.
+  64-bit dHash on every capture stored in `photos.phash` (schema v3).
+  When `station_config.dedup_threshold` is set, the scheduler drops
+  near-duplicate frames in a 10-min window. Saves SD card + bandwidth
+  on static scenes overnight. No-op if Pillow missing.
+- **Watermark / orientation rotate** — new
+  `arclap_station/photos/watermark.py` runs on every capture (API +
+  scheduler). Always honours EXIF Orientation, baking the rotation into
+  pixels so every viewer is correct. When `station_config.watermark`
+  is true, burns `serial · site · UTC timestamp` bottom-right.
+- **Audit log signed export** — `audit.export_signed()` +
+  `GET /api/settings/audit/export`. Bundle = entries + SHA-256
+  fingerprint of canonical JSON + optional Ed25519 signature
+  (if `/etc/arclap/audit-export.key` present). Drop-in legal /
+  forensic chain. Audit emits `audit.export` on every download.
+- **Project lifecycle fields** on station.json — `site`, `watermark`,
+  `project_starts_at`, `project_ends_at`, `bandwidth_kbps`.
+
+### Field + connectivity
+- **WireGuard support tunnel (§12.5.6)** — new
+  `arclap_station/cloud/wireguard.py`. Outbound-only WG client driven
+  by cockpit toggle. `/api/diag/tunnel` returns status (installed,
+  configured, up, peer endpoint, latest handshake age). POST `/tunnel/up`
+  and `/tunnel/down`. Audited end-to-end. Self-disables if wg-quick
+  or config absent — never crashes the service.
+- **Multi-NIC route priority** — new
+  `systemd/NetworkManager-arclap.conf` drop-in: ethernet metric 50 <
+  wifi 300 < gsm 600. Prefer wired link when both up.
+- **Keyboard shortcuts** — new `lib/hotkeys.ts`:
+  `g h/c/g/s/d/t/n` page nav, `c` capture, `r` reconnect, `/` focus
+  search, `?` shortcuts overlay. Skip input/textarea targets. Wired
+  into authenticated Shell only.
+- **Toast queue** — `components/ToastQueue.tsx`. Up to 5 stacked
+  toasts top-right, click-to-dismiss, auto-expire. Replaces single
+  string toast state scattered across pages.
+- **Help tooltips with deep-link** — `components/HelpTooltip.tsx`.
+  Hoverable `?` chip with short text + optional doc URL.
+- **RGB histogram** in viewfinder (replaces luma-only) — three
+  translucent channels with edge clipping indicators at bin 0/31.
+- **Mirror lock-up button** on Camera page — best-effort
+  `/main/capturesettings/mirrorlockup=On` via gphoto2; toast on success
+  or "not supported on this body".
+
+### Security
+- **PIN rotation reminder** — `/api/auth/status` now returns
+  `pin_age_days` + `pin_rotation_overdue=true` when > 90 days. Cockpit
+  can render a nag banner without a separate endpoint.
+- Existing per-IP brute-force lockout (already in v0.2) verified
+  end-to-end via `failed_attempts` map keyed by IP.
+
+### Pyproject
+- New optional deps: `sentry = ["sentry-sdk[fastapi]>=2.14,<3"]`,
+  `mqtt = ["paho-mqtt>=2.1,<3"]`. Production images opt in;
+  dev / standalone path unchanged.
+
+### Verified live on `arclap-st-90107cb4`
+- `arclap-station support-bundle` → 26 KB .tar.gz under
+  `/var/lib/arclap/support/`.
+- `arclap-station db-integrity` → `result: ok`.
+- `/api/diag/services` reports 10 units, every arclap-* unit active.
+- `/api/diag/percentiles` returns p50/p95 from real traffic.
+- `/api/diag/tunnel` returns `installed:false` (WG not yet installed)
+  but the API surface is in place.
+- `/api/auth/status.pin_age_days` returns `0` (PIN set today).
+- `/metrics` exposes 60+ time-series.
+- 6 timers active: watchdog (1m), camera-watchdog (1m),
+  retention (daily 03:30), **timelapse (daily 03:33)**,
+  backup (daily 04:00), integrity (Sun 05:03).
+- Latency check unchanged: /api/health 3 ms, /api/home 5 ms,
+  /api/camera/info 4 ms, /api/diag/services 96 ms (10 systemctl shells).
+
+### Known gaps for follow-up
+- **smartctl** isn't packaged on this dev Pi — install via apt for
+  production images. The endpoint already handles its absence cleanly.
+- **WireGuard tunnel** config file + bastion keys ship in install.sh
+  (deferred — needs the actual bastion endpoint provisioned by ops).
+- **A/B OTA partition swap (§12.5.4)** is partially specced but not
+  implemented — biggest remaining item.
+- **Read-only root filesystem** documented in
+  `docs/operator.md#read-only-root` but not toggled on the live Pi
+  (would have lost the SSH foothold mid-session).
+
 ## v0.7.0 — 2026-05-19 (operability + connectivity)
 
 Tier 2 (operability) and Tier 3 (new connectivity capability) ship

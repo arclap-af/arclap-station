@@ -22,6 +22,12 @@ class StationConfig:
     pair_token: str | None = None
     paired: bool = False
     first_boot_completed: bool = False
+    # v0.8: new fields
+    site: str = ""                       # short label, burned into watermark
+    watermark: bool = False              # burn serial+site+ts on every JPEG
+    project_starts_at: str | None = None # ISO8601, informational
+    project_ends_at: str | None = None   # ISO8601, photos auto-purge N days after
+    bandwidth_kbps: int | None = None    # per-station upload rate cap (None = unlimited)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from arclap_station import __version__
@@ -39,6 +39,15 @@ def _configure_logging(level: str = "INFO") -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     import asyncio  # noqa: PLC0415
+
+    # First thing on startup: enable faulthandler so any SIGSEGV / fatal
+    # signal during init dumps a usable traceback. Idempotent.
+    try:
+        from arclap_station.diag import init as _diag_init  # noqa: PLC0415
+
+        _diag_init()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("diag init failed: %s", exc)
 
     settings = get_settings()
     settings.paths.ensure()
@@ -128,7 +137,45 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    # Prometheus middleware — instruments every request with a counter
+    # + latency histogram. Output lives at /metrics (no auth, loopback
+    # only). Cost: a dict lookup + 1 lock per request, ~1µs.
+    from arclap_station.metrics_prom import PrometheusMiddleware, render as _prom_render  # noqa: PLC0415
+
+    app.add_middleware(PrometheusMiddleware)
+
+    # Sentry crash reporting — only wired when SENTRY_DSN is set in env.
+    # Production images can opt in via /etc/arclap/environment; dev
+    # without a DSN is unchanged (no network noise, no telemetry).
+    import os as _os  # noqa: PLC0415
+
+    if _os.environ.get("SENTRY_DSN"):
+        try:
+            import sentry_sdk  # noqa: PLC0415
+            from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: PLC0415
+            from sentry_sdk.integrations.starlette import StarletteIntegration  # noqa: PLC0415
+
+            sentry_sdk.init(
+                dsn=_os.environ["SENTRY_DSN"],
+                environment=_os.environ.get("SENTRY_ENVIRONMENT", "production"),
+                release=f"arclap-station@{__version__}",
+                traces_sample_rate=float(_os.environ.get("SENTRY_TRACES", "0.0")),
+                send_default_pii=False,
+                integrations=[FastApiIntegration(), StarletteIntegration()],
+            )
+            log.info("sentry: enabled (env=%s)", _os.environ.get("SENTRY_ENVIRONMENT", "production"))
+        except ImportError:
+            log.warning("SENTRY_DSN set but sentry-sdk not installed — skipping")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("sentry init failed: %s", exc)
+
     app.include_router(build_router())
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        """Prometheus exposition. No auth — protected by Caddy ACL
+        (loopback + admin subnet) in production."""
+        return Response(content=_prom_render(), media_type="text/plain; version=0.0.4")
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
@@ -221,6 +268,14 @@ def cli(argv: list[str] | None = None) -> int:
         "db-integrity",
         help="run PRAGMA integrity_check on state.db (intended for weekly timer)",
     )
+    sub.add_parser(
+        "support-bundle",
+        help="write a redacted .tar.gz of logs + db + config for support tickets",
+    )
+    sub.add_parser(
+        "timelapse-daily",
+        help="render the last 24h as an MP4 timelapse (intended for daily timer)",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "serve"
@@ -251,6 +306,16 @@ def cli(argv: list[str] | None = None) -> int:
         from arclap_station.backup import run_integrity  # noqa: PLC0415
 
         return run_integrity()
+
+    if cmd == "support-bundle":
+        from arclap_station.diag import run_support_bundle  # noqa: PLC0415
+
+        return run_support_bundle()
+
+    if cmd == "timelapse-daily":
+        from arclap_station.photos.timelapse import run_daily  # noqa: PLC0415
+
+        return run_daily()
 
     if cmd == "healthcheck":
         import httpx  # noqa: PLC0415

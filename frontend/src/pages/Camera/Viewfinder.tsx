@@ -9,7 +9,8 @@ interface ViewfinderProps {
 export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [fps, setFps] = useState(0);
-  const [hist, setHist] = useState<number[] | null>(null);
+  // RGB histogram: each channel is a 32-bin array.
+  const [hist, setHist] = useState<{ r: number[]; g: number[]; b: number[]; l: number[] } | null>(null);
   const counterRef = useRef({ count: 0, last: performance.now(), url: null as string | null });
   // Throttle histogram recompute so we don't tax the Pi 5's browser CPU.
   const lastHistRef = useRef(0);
@@ -126,26 +127,41 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
             padding: 6,
             borderRadius: 6,
             background: "rgba(0,0,0,0.7)",
-            width: 140,
-            height: 60,
+            width: 160,
+            height: 70,
           }}
         >
-          <svg width="100%" height="100%" viewBox="0 0 100 40" preserveAspectRatio="none">
-            {hist.map((v, i, a) => {
-              const x = i * (100 / a.length);
-              const w = 100 / a.length;
-              const h = Math.max(0, Math.min(40, v));
-              return (
-                <rect
-                  key={i}
-                  x={x}
-                  y={40 - h}
-                  width={w - 0.3}
-                  height={h}
-                  fill="rgba(255,255,255,0.78)"
-                />
-              );
-            })}
+          <svg width="100%" height="100%" viewBox="0 0 100 50" preserveAspectRatio="none">
+            {/* Each channel drawn translucent so overlap shows neutral
+                grey (= no clipping); red-only / blue-only spikes pop. */}
+            {(["r", "g", "b"] as const).map((ch) => (
+              <g key={ch}>
+                {hist[ch].map((v, i, a) => {
+                  const x = i * (100 / a.length);
+                  const w = 100 / a.length;
+                  const h = Math.max(0, Math.min(50, v));
+                  const fill = ch === "r"
+                    ? "rgba(255,80,80,0.55)"
+                    : ch === "g"
+                    ? "rgba(80,255,120,0.55)"
+                    : "rgba(120,150,255,0.55)";
+                  return (
+                    <rect
+                      key={`${ch}${i}`}
+                      x={x}
+                      y={50 - h}
+                      width={w - 0.3}
+                      height={h}
+                      fill={fill}
+                    />
+                  );
+                })}
+              </g>
+            ))}
+            {/* Clipping indicators — tiny red bars at left/right edges
+                when bin 0 (under) or bin 31 (over) is saturated. */}
+            {hist.r[31] >= 45 && <rect x="99" y="0" width="1.2" height="50" fill="#ff3030" />}
+            {hist.r[0] >= 45 && <rect x="0" y="0" width="1.2" height="50" fill="#3030ff" />}
           </svg>
         </div>
       )}
@@ -153,13 +169,14 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
   );
 }
 
-// Compute a 32-bin luma histogram from the live preview JPEG. Returns
-// scaled bar heights (0-40 range to match the SVG viewBox). Best-effort:
-// returns null if decoding fails (older browsers, broken JPEG, etc.).
-async function computeHistogram(blob: Blob): Promise<number[] | null> {
+// Compute 32-bin R/G/B/luma histograms from the live preview JPEG.
+// Returns scaled bar heights (0-50 range to match the SVG viewBox).
+// Best-effort: null if decoding fails (older browsers, broken JPEG).
+async function computeHistogram(blob: Blob): Promise<{
+  r: number[]; g: number[]; b: number[]; l: number[];
+} | null> {
   try {
     const bitmap = await createImageBitmap(blob);
-    // Downscale for cheap luma sampling — quality is irrelevant.
     const W = 64;
     const H = Math.max(1, Math.round((bitmap.height / bitmap.width) * W));
     const canvas = new OffscreenCanvas(W, H);
@@ -167,17 +184,20 @@ async function computeHistogram(blob: Blob): Promise<number[] | null> {
     if (!ctx) return null;
     ctx.drawImage(bitmap, 0, 0, W, H);
     const data = ctx.getImageData(0, 0, W, H).data;
-    const bins = new Array(32).fill(0);
+    const r = new Array(32).fill(0);
+    const g = new Array(32).fill(0);
+    const b = new Array(32).fill(0);
+    const l = new Array(32).fill(0);
     for (let i = 0; i < data.length; i += 4) {
-      // Rec.601 luma — fine for exposure visualisation.
-      const y =
-        (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) | 0;
-      const b = Math.min(31, y >> 3);
-      bins[b]++;
+      r[Math.min(31, data[i] >> 3)]++;
+      g[Math.min(31, data[i + 1] >> 3)]++;
+      b[Math.min(31, data[i + 2] >> 3)]++;
+      const y = (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) | 0;
+      l[Math.min(31, y >> 3)]++;
     }
-    const max = Math.max(1, ...bins);
-    // Scale to the SVG height (40 px).
-    return bins.map((b) => Math.round((b / max) * 40));
+    const maxAll = Math.max(1, ...r, ...g, ...b);
+    const scale = (bins: number[]) => bins.map((v) => Math.round((v / maxAll) * 50));
+    return { r: scale(r), g: scale(g), b: scale(b), l: scale(l) };
   } catch {
     return null;
   }

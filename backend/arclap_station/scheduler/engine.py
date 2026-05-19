@@ -143,14 +143,43 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
         pass  # fall through — capture will fail loudly if disk is truly dead
 
     photo_path = adapter.capture()
-    # Same EXIF extraction as /api/camera/capture — so scheduled photos
-    # carry ISO/shutter/aperture/dimensions in the Gallery instead of
-    # showing "—" because they took a different code path to disk.
+    # Same EXIF + watermark/rotate path as /api/camera/capture.
+    try:
+        from arclap_station.photos.watermark import apply_watermark_and_rotate  # noqa: PLC0415
+        apply_watermark_and_rotate(photo_path)
+    except Exception:  # noqa: BLE001
+        pass
     exif, width, height = extract_exif(photo_path)
+
+    # Perceptual-hash dedup: if this frame is near-identical to the last
+    # one taken under this schedule, drop it on the floor. Saves SD card
+    # + bandwidth on static scenes overnight.
+    try:
+        from arclap_station.photos.dedup import (  # noqa: PLC0415
+            compute_dhash, store_hash, maybe_drop_duplicate, DEFAULT_THRESHOLD,
+        )
+        from arclap_station.station_config import get_station_store  # noqa: PLC0415
+
+        cfg_obj = get_station_store().load()
+        threshold = getattr(cfg_obj, "dedup_threshold", None) or DEFAULT_THRESHOLD
+        # Only auto-drop if the operator explicitly enabled dedup
+        # (presence of `dedup_threshold` field in station.json).
+        if getattr(cfg_obj, "dedup_threshold", None) is not None:
+            if maybe_drop_duplicate(photo_path, schedule_id, threshold):
+                return {"ok": False, "skipped": True, "reason": "duplicate"}
+        new_hash_value = compute_dhash(photo_path)
+    except Exception:  # noqa: BLE001
+        new_hash_value = None
+
     store = get_store()
     record = store.register(
         photo_path, exif=exif, width=width, height=height, job_id=schedule_id
     )
+    if new_hash_value is not None:
+        try:
+            store_hash(record.id, new_hash_value)
+        except Exception:  # noqa: BLE001
+            pass
     dest_ids = list_destination_ids(sched.dest_filter)
     if dest_ids:
         get_queue().enqueue(record.id, dest_ids)

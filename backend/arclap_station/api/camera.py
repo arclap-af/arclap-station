@@ -111,10 +111,28 @@ async def capture(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
+    # Bake EXIF orientation into pixels + apply watermark (no-op if disabled).
+    try:
+        from arclap_station.photos.watermark import apply_watermark_and_rotate  # noqa: PLC0415
+
+        apply_watermark_and_rotate(photo_path)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Extract EXIF — ISO / shutter / aperture / dimensions — so the Gallery
     # can show real settings per photo instead of "—".
     exif, width, height = extract_exif(photo_path)
     record = get_store().register(photo_path, exif=exif, width=width, height=height)
+    # Compute perceptual hash for dedup window even if dedup is off —
+    # the hash is cheap and lets a future ?dedup=1 run retroactively.
+    try:
+        from arclap_station.photos.dedup import compute_dhash, store_hash  # noqa: PLC0415
+
+        h = compute_dhash(photo_path)
+        if h is not None:
+            store_hash(record.id, h)
+    except Exception:  # noqa: BLE001
+        pass
     audit_emit(
         "user",
         "camera.capture",

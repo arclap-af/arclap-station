@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arclap-station"
-version = "0.7.0"
+version = "0.8.0"
 description = "Arclap Station — on-device control plane for Raspberry Pi 5 tethered to a DSLR."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -50,6 +50,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gphoto = ["gphoto2==2.5.1"]
+sentry = ["sentry-sdk[fastapi]>=2.14,<3"]
+mqtt = ["paho-mqtt>=2.1,<3"]
 dev = [
     "pytest==8.3.3",
     "pytest-asyncio==0.24.0",

@@ -10,9 +10,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 
 import { Sidebar } from "./components/Sidebar";
+import { ToastProvider } from "./components/ToastQueue";
 import { Topbar } from "./components/Topbar";
 import { URLBar } from "./components/URLBar";
 import { auth } from "./lib/bridge/auth";
+import { useGlobalHotkeys } from "./lib/hotkeys";
 import { setup } from "./lib/bridge/setup";
 import { home as homeApi } from "./lib/bridge/home";
 
@@ -30,19 +32,21 @@ import { Settings } from "./pages/Settings";
 export function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<RootGate />} />
-        <Route path="/setup/*" element={<SetupWizard />} />
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/*"
-          element={
-            <RequireAuth>
-              <Shell />
-            </RequireAuth>
-          }
-        />
-      </Routes>
+      <ToastProvider>
+        <Routes>
+          <Route path="/" element={<RootGate />} />
+          <Route path="/setup/*" element={<SetupWizard />} />
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/*"
+            element={
+              <RequireAuth>
+                <Shell />
+              </RequireAuth>
+            }
+          />
+        </Routes>
+      </ToastProvider>
     </BrowserRouter>
   );
 }
@@ -83,6 +87,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 function Shell() {
+  // Wire global keyboard shortcuts inside the authenticated shell only —
+  // so Login + Setup pages don't intercept keys.
+  useGlobalHotkeys();
   const { data: telemetry } = useQuery({
     queryKey: ["home.telemetry"],
     queryFn: homeApi.telemetry,

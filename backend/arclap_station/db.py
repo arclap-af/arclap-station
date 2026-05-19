@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # Current schema version. Bump when adding a migration.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -215,7 +215,7 @@ class Database:
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()
             current = int(row[0]) if row else 0
-            # v0 → v1 → v2 migration ladder. New steps go at the bottom.
+            # v0 → v1 → v2 → v3 migration ladder. New steps go at the bottom.
             if current < 2:
                 # Add `starred` to photos (retention policy gate).
                 existing = {
@@ -227,6 +227,38 @@ class Database:
                     )
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_photos_starred ON photos(starred)"
+                )
+            if current < 3:
+                # Add perceptual hash for dedup (v0.8).
+                existing = {
+                    r[1] for r in conn.execute("PRAGMA table_info(photos)").fetchall()
+                }
+                if "phash" not in existing:
+                    conn.execute(
+                        "ALTER TABLE photos ADD COLUMN phash TEXT"
+                    )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_photos_phash ON photos(phash)"
+                )
+                # Pre-rendered timelapses (v0.8).
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS timelapses (
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        period       TEXT NOT NULL,
+                        start_at     TEXT NOT NULL,
+                        end_at       TEXT NOT NULL,
+                        photos_in    INTEGER NOT NULL,
+                        render_ms    INTEGER NOT NULL,
+                        path         TEXT NOT NULL,
+                        size_bytes   INTEGER NOT NULL,
+                        created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                    )
+                    """
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_timelapses_period_start "
+                    "ON timelapses(period, start_at DESC)"
                 )
             # Write the new version.
             if row is None:
