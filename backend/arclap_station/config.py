@@ -68,9 +68,14 @@ class Settings:
     pin_lockout_max_attempts: int = 5
     pin_lockout_seconds: int = 900  # 15 minutes
     session_max_age_seconds: int = 60 * 60 * 12  # 12h
-    pty_path: str = "/opt/arclap/bin:/usr/bin"
-    pty_cpu_seconds: int = 30
-    pty_address_kb: int = 524_288
+    # PATH inside the operator shell — wide enough for systemctl, ip,
+    # ss, gphoto2, journalctl, lsusb, smartctl. Outside the operator
+    # shell the service's own systemd hardening still applies.
+    pty_path: str = "/opt/arclap/bin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin"
+    # 5 minutes of CPU per spawned process (was 30s — too aggressive,
+    # `journalctl -f` got killed before the operator could read it).
+    pty_cpu_seconds: int = 300
+    pty_address_kb: int = 1_048_576  # 1 GB virtual address space
     cloud_base_url: str = "https://cloud.arclap.ch"
     skip_disk_pct_threshold: int = 90
     use_mock_camera: bool = False

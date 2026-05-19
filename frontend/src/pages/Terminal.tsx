@@ -1,150 +1,189 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Terminal as XTerm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import "@xterm/xterm/css/xterm.css";
 
 import { Button } from "../components/Button";
 import { terminal } from "../lib/bridge/terminal";
 import { useWebSocket } from "../lib/ws";
 
-const PRESETS: Record<"shell" | "gphoto2", Array<[string, string]>> = {
-  shell: [
-    ["systemctl status arclap-station", "Service status"],
-    ["systemctl restart arclap-station", "Restart service"],
-    ["journalctl -u arclap-station -n 20", "Recent logs"],
-    ["df -h /media/sdcard", "SD card usage"],
-    ["lsusb", "USB devices"],
-    ["ip a", "Network interfaces"],
-    ["vcgencmd measure_temp", "Pi temperature"],
-    ["sudo systemctl list-timers --all", "Scheduled tasks"],
-  ],
-  gphoto2: [
-    ["gphoto2 --auto-detect", "List connected cameras"],
-    ["gphoto2 --summary", "Camera info"],
-    ["gphoto2 --list-config", "All settable properties"],
-    ["gphoto2 --get-config /main/imgsettings/iso", "Read ISO"],
-    ["gphoto2 --capture-preview", "Live view frame"],
-    ["gphoto2 --reset", "USB reset"],
-  ],
-};
+// v0.8.2 — replaced the home-rolled buffer + ANSI-strip with a real
+// xterm.js terminal: full colour, scrollback, copy/paste, arrow-key
+// history (handled by the remote bash), Ctrl-C / Ctrl-D / Ctrl-L, etc.
+// The backend is now plain interactive bash (not `--restricted`) running
+// as the unprivileged arclap user with sudo blocked.
 
-const decoder = new TextDecoder();
-
-// Strip ANSI CSI escape sequences from PTY output. We don't render a full
-// xterm here — that needs xterm.js — so we just drop the cursor/color codes
-// to keep the output readable.
-const ANSI_RE =
-  // eslint-disable-next-line no-control-regex
-  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\]\d+;[^\x07]*\x07|[@-_])/g;
-
-const MAX_BUFFER = 200_000; // chars; well past one screen of output
+const PRESETS: Array<{ group: string; rows: Array<[string, string]> }> = [
+  {
+    group: "Station",
+    rows: [
+      ["status", "Service status (arclap-station)"],
+      ["logs", "Recent journal (50 lines)"],
+      ["tailog", "Live journal (Ctrl-C to stop)"],
+      ["timers", "All systemd timers"],
+      ["temp", "CPU temperature"],
+      ["arclap-station support-bundle", "Generate support .tar.gz"],
+      ["arclap-station db-integrity", "Run PRAGMA integrity_check"],
+    ],
+  },
+  {
+    group: "Camera",
+    rows: [
+      ["cam", "Auto-detect cameras"],
+      ["gphoto2 --summary", "Camera info dump"],
+      ["gphoto2 --get-config /main/imgsettings/iso", "Read ISO"],
+      ["gphoto2 --reset", "USB reset"],
+      ["usb", "lsusb"],
+    ],
+  },
+  {
+    group: "Storage",
+    rows: [
+      ["df -h /media/sdcard", "SD card usage"],
+      ["du -sh /media/sdcard/photos/*", "Per-day photo dirs"],
+      ["photos", "List photos directory"],
+      ["ls -la /var/lib/arclap/backups/", "DB backups"],
+      ["ls -la /var/lib/arclap/timelapses/", "Pre-rendered timelapses"],
+    ],
+  },
+  {
+    group: "Network",
+    rows: [
+      ["ip -br address", "All interfaces"],
+      ["ss -tln", "Listening ports"],
+      ["ping -c 3 1.1.1.1", "Internet probe"],
+      ["nmcli device wifi list", "WiFi networks"],
+    ],
+  },
+];
 
 export function Terminal() {
-  // Single buffer string makes scrollback feel like a real terminal —
-  // line breaks happen visually via white-space:pre-wrap.
-  const [buffer, setBuffer] = useState<string>(
-    "Arclap Station restricted shell\nType a command and press Enter. Press preset on the right to insert.\n",
-  );
-  const [input, setInput] = useState("");
-  const [tab, setTab] = useState<"shell" | "gphoto2">("shell");
-  const cmdHistory = useRef<string[]>([]);
-  const histIdx = useRef(-1);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const [resizing, setResizing] = useState(false);
 
-  const onMessage = useCallback((ev: MessageEvent) => {
-    const raw =
-      typeof ev.data === "string"
-        ? ev.data
-        : ev.data instanceof ArrayBuffer
-          ? decoder.decode(ev.data)
-          : decoder.decode(new Uint8Array(ev.data as ArrayBuffer));
-    if (!raw) return;
-    const clean = raw.replace(/\r\n?/g, "\n").replace(ANSI_RE, "");
-    setBuffer((prev) => {
-      const next = prev + clean;
-      return next.length > MAX_BUFFER ? next.slice(-MAX_BUFFER) : next;
+  // Initialise xterm once — destroy on unmount.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const term = new XTerm({
+      cursorBlink: true,
+      fontFamily:
+        '"JetBrains Mono", "SF Mono", "Menlo", "Consolas", ui-monospace, monospace',
+      fontSize: 13,
+      lineHeight: 1.35,
+      scrollback: 5000,
+      allowProposedApi: true,
+      convertEol: true,
+      theme: {
+        background: "#06090d",
+        foreground: "#e8edf3",
+        cursor: "#8fffd6",
+        cursorAccent: "#06090d",
+        selectionBackground: "#374151",
+        black: "#0b0f14",
+        red: "#f87171",
+        green: "#86efac",
+        yellow: "#fde68a",
+        blue: "#93c5fd",
+        magenta: "#f0abfc",
+        cyan: "#67e8f9",
+        white: "#e5e7eb",
+        brightBlack: "#374151",
+        brightRed: "#fca5a5",
+        brightGreen: "#bbf7d0",
+        brightYellow: "#fef3c7",
+        brightBlue: "#bfdbfe",
+        brightMagenta: "#f5d0fe",
+        brightCyan: "#a5f3fc",
+        brightWhite: "#f9fafb",
+      },
     });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon());
+    term.open(containerRef.current);
+    fit.fit();
+    termRef.current = term;
+    fitRef.current = fit;
+    return () => {
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, []);
+
+  // WS message handler — pump raw bytes into xterm.
+  const onMessage = useCallback((ev: MessageEvent) => {
+    const term = termRef.current;
+    if (!term) return;
+    if (ev.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(ev.data));
+    } else if (typeof ev.data === "string") {
+      term.write(ev.data);
+    } else if (ev.data instanceof Blob) {
+      ev.data.arrayBuffer().then((buf) => term.write(new Uint8Array(buf)));
+    }
   }, []);
 
   const { status, send } = useWebSocket(terminal.url(), onMessage, {
     binaryType: "arraybuffer",
   });
 
-  // Auto-scroll to bottom on new output.
+  // Wire xterm input → WS (browser keystrokes → bash stdin).
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [buffer]);
+    const term = termRef.current;
+    if (!term) return;
+    const disp = term.onData((data) => send(data));
+    return () => disp.dispose();
+  }, [send]);
 
-  // Send a resize message once the WS opens so `top`/`htop` don't wrap weirdly.
+  // Tell the backend to resize the PTY whenever the container resizes,
+  // so `top` / `htop` / line wrapping all look right.
   useEffect(() => {
-    if (status === "open") {
-      send(JSON.stringify({ type: "resize", rows: 28, cols: 110 }));
+    function doResize() {
+      const fit = fitRef.current;
+      const term = termRef.current;
+      if (!fit || !term) return;
+      setResizing(true);
+      try {
+        fit.fit();
+        if (status === "open") {
+          send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+        }
+      } finally {
+        setTimeout(() => setResizing(false), 200);
+      }
     }
+    doResize();
+    window.addEventListener("resize", doResize);
+    return () => window.removeEventListener("resize", doResize);
+  }, [send, status]);
+
+  // Send an initial resize when the WS opens (with a small delay so
+  // xterm has measured its container).
+  useEffect(() => {
+    if (status !== "open") return;
+    const t = setTimeout(() => {
+      const term = termRef.current;
+      if (term) send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+    }, 60);
+    return () => clearTimeout(t);
   }, [status, send]);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, [tab]);
-
-  function runCommand(cmd: string) {
+  // Run a command — pretend the user typed it + pressed Enter.
+  const runPreset = (cmd: string) => {
     if (status !== "open") return;
-    if (cmd) {
-      cmdHistory.current.push(cmd);
-      histIdx.current = -1;
-    }
     send(cmd + "\n");
-    setInput("");
-  }
-
-  function sendCtrlC() {
-    if (status !== "open") return;
-    // 0x03 = ETX = Ctrl+C. PTY interprets it as SIGINT to the foreground process.
-    send(new Uint8Array([0x03]));
-    setInput("");
-  }
-
-  const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      runCommand(input);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      if (cmdHistory.current.length === 0) return;
-      const ni =
-        histIdx.current < 0
-          ? cmdHistory.current.length - 1
-          : Math.max(0, histIdx.current - 1);
-      histIdx.current = ni;
-      setInput(cmdHistory.current[ni]);
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      if (histIdx.current < 0) return;
-      const ni = histIdx.current + 1;
-      if (ni >= cmdHistory.current.length) {
-        histIdx.current = -1;
-        setInput("");
-      } else {
-        histIdx.current = ni;
-        setInput(cmdHistory.current[ni]);
-      }
-    } else if (e.key === "c" && e.ctrlKey) {
-      // Ctrl+C with non-empty input → clear input. Empty input → SIGINT.
-      e.preventDefault();
-      if (input) setInput("");
-      else sendCtrlC();
-    } else if (e.key === "l" && e.ctrlKey) {
-      e.preventDefault();
-      setBuffer("");
-    } else if (e.key === "d" && e.ctrlKey) {
-      e.preventDefault();
-      if (!input) {
-        // 0x04 = EOT = Ctrl+D → close shell
-        send(new Uint8Array([0x04]));
-      }
-    }
+    termRef.current?.focus();
   };
+
+  const clear = () => termRef.current?.clear();
 
   return (
     <div className="as-scroll">
-      <div className="as-page" style={{ maxWidth: 1300 }}>
+      <div className="as-page" style={{ maxWidth: 1400 }}>
         <div
           style={{
             display: "flex",
@@ -156,29 +195,23 @@ export function Terminal() {
           <div>
             <h1 className="as-h1">Terminal</h1>
             <div className="as-h1-sub">
-              Restricted PTY · runs as <span className="mono">arclap</span> · sudo blocked ·
-              Ctrl+C interrupt · Ctrl+L clear · Ctrl+D exit
+              Interactive bash · runs as <span className="mono">arclap</span> ·
+              <span className="mono"> sudo </span>blocked ·
+              full ANSI colour + scrollback · arrow keys = command history
             </div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <Button onClick={() => setBuffer("")}>Clear</Button>
-            <Button
-              onClick={() => {
-                const blob = new Blob([buffer], { type: "text/plain" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `shell-${Date.now()}.log`;
-                a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 500);
-              }}
-            >
-              Export session
+            <Button onClick={clear}>Clear screen</Button>
+            <Button onClick={() => termRef.current?.paste(termRef.current?.getSelection() ?? "")}>
+              Re-run selection
             </Button>
           </div>
         </div>
 
-        <div className="as-grid-2" style={{ alignItems: "start", gap: 14 }}>
+        <div
+          className="as-grid-2"
+          style={{ alignItems: "start", gap: 14, gridTemplateColumns: "minmax(0, 1fr) 320px" }}
+        >
           <div className="as-card" style={{ padding: 0, overflow: "hidden" }}>
             <div
               style={{
@@ -207,7 +240,7 @@ export function Terminal() {
                   textAlign: "center",
                 }}
               >
-                arclap@station: ~
+                arclap@station:~ — xterm.js {resizing ? "· resizing" : ""}
               </div>
               <span
                 className="mono"
@@ -221,128 +254,67 @@ export function Terminal() {
               </span>
             </div>
             <div
-              ref={scrollRef}
-              role="log"
-              aria-live="polite"
+              ref={containerRef}
               style={{
-                height: 520,
-                overflowY: "auto",
-                padding: "12px 14px",
+                height: 560,
                 background: "#06090d",
-                fontFamily: "var(--as-mono)",
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                color: "var(--as-ink)",
+                padding: "8px 4px 4px 12px",
               }}
-              onClick={() => inputRef.current?.focus()}
-            >
-              {buffer}
-            </div>
-            <div
-              style={{
-                padding: "8px 12px",
-                background: "#06090d",
-                borderTop: "1px solid var(--as-line)",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <span
-                className="mono"
-                style={{ color: "var(--as-accent)", fontSize: 12 }}
-              >
-                $
-              </span>
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={onKey}
-                disabled={status !== "open"}
-                aria-label="Shell input"
-                style={{
-                  flex: 1,
-                  background: "transparent",
-                  border: "none",
-                  outline: "none",
-                  color: "var(--as-ink)",
-                  fontFamily: "var(--as-mono)",
-                  fontSize: 12,
-                  padding: 0,
-                }}
-                placeholder={
-                  status === "open"
-                    ? "Type a command, ↑ history, Ctrl+C interrupt, Ctrl+L clear"
-                    : status === "connecting"
-                      ? "Connecting…"
-                      : "Disconnected — refresh the page"
-                }
-                autoFocus
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <Button
-                type="button"
-                onClick={sendCtrlC}
-                disabled={status !== "open"}
-                style={{ padding: "4px 10px", fontSize: 10 }}
-                title="Send SIGINT (Ctrl+C)"
-              >
-                Ctrl-C
-              </Button>
-            </div>
+              onClick={() => termRef.current?.focus()}
+            />
           </div>
 
           <div className="as-card" style={{ padding: 0, overflow: "hidden" }}>
             <div
-              className="as-tabs"
-              style={{ margin: 0, padding: "0 12px", background: "var(--as-bg-2)" }}
+              style={{
+                padding: "10px 14px",
+                background: "var(--as-bg-2)",
+                fontSize: 13,
+                fontWeight: 700,
+              }}
             >
-              {(["shell", "gphoto2"] as const).map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  className={`as-tab ${tab === t ? "active" : ""}`}
-                  onClick={() => setTab(t)}
-                >
-                  {t}
-                </button>
-              ))}
+              Quick commands
             </div>
             <div style={{ padding: 12, maxHeight: 560, overflowY: "auto" }}>
-              {PRESETS[tab].map(([c, d], i) => (
-                <div
-                  key={i}
-                  onClick={() => {
-                    setInput(c);
-                    inputRef.current?.focus();
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => e.key === "Enter" && setInput(c)}
-                  style={{
-                    padding: "9px 11px",
-                    borderRadius: 8,
-                    border: "1px solid var(--as-line)",
-                    marginBottom: 6,
-                    cursor: "pointer",
-                    background: "var(--as-bg-2)",
-                  }}
-                >
+              {PRESETS.map((p) => (
+                <div key={p.group} style={{ marginBottom: 14 }}>
                   <div
-                    className="mono"
                     style={{
-                      fontSize: 11.5,
-                      color: "var(--as-accent-2)",
-                      marginBottom: 2,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: "var(--as-ink-3)",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.06,
+                      marginBottom: 6,
                     }}
                   >
-                    {c}
+                    {p.group}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--as-ink-3)" }}>{d}</div>
+                  {p.rows.map(([cmd, desc]) => (
+                    <div
+                      key={cmd}
+                      onClick={() => runPreset(cmd)}
+                      style={{
+                        padding: "6px 8px",
+                        borderRadius: 5,
+                        border: "1px solid var(--as-line)",
+                        marginBottom: 4,
+                        cursor: "pointer",
+                        background: "var(--as-fill-1)",
+                      }}
+                      title={cmd}
+                    >
+                      <div
+                        className="mono"
+                        style={{ fontSize: 11.5, color: "var(--as-ink-1)" }}
+                      >
+                        {cmd}
+                      </div>
+                      <div style={{ fontSize: 10.5, color: "var(--as-ink-3)" }}>
+                        {desc}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
