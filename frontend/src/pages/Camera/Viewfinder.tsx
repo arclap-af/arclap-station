@@ -27,7 +27,8 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
     }
   };
 
-  const { status } = useWebSocket("/api/camera/liveview", onFrame, { binaryType: "blob" });
+  // Backend WS lives at /api/camera/preview-ws (see api/camera.py).
+  const { status } = useWebSocket("/api/camera/preview-ws", onFrame, { binaryType: "blob" });
 
   useEffect(
     () => () => {

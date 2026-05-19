@@ -477,6 +477,22 @@ install_backend() {
     "${venv}/bin/pip" install --upgrade --force-reinstall "${wheel}"
   ok "Installed $(basename "${wheel}") into venv"
 
+  # python-gphoto2 is the binding to libgphoto2 for DSLR control. It's
+  # an OPTIONAL extra in pyproject.toml so the base wheel stays portable
+  # to dev machines, but on a real Pi we always want it. Failing to
+  # install drops us to the MockCamera adapter (which returns fake EOS
+  # R6 data even when a real Canon is plugged in — confusing!).
+  info "Installing python-gphoto2 (libgphoto2 binding)"
+  if "${venv}/bin/pip" install --upgrade "gphoto2>=2.5.0"; then
+    ok "python-gphoto2 installed"
+  else
+    warn "python-gphoto2 install failed — camera will fall back to mock mode"
+  fi
+
+  # Ensure the venv is owned by arclap so the service can read it (root
+  # ownership from a prior pip-as-root run breaks bcrypt key loads etc.).
+  chown -R "${ARCLAP_USER}:${ARCLAP_GROUP}" "${venv}"
+
   # CLI shim — single shared name regardless of internal naming.
   if [[ -x "${venv}/bin/arclap-station" ]]; then
     ln -sf "${venv}/bin/arclap-station" /usr/local/bin/arclap-station
