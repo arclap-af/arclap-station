@@ -228,9 +228,14 @@ jobs:
       - name: Install pi-gen prerequisites
         run: |
           sudo apt-get update -qq
+          # pi-gen's dependencies_check refuses to run without
+          # qemu-user-binfmt + arch-test in addition to qemu-user-static.
           sudo apt-get install -y --no-install-recommends \
-            coreutils quilt parted qemu-user-static debootstrap zerofree zip dosfstools \
-            libcap2-bin grep rsync xz-utils file git curl bc xxd kpartx libarchive-tools
+            coreutils quilt parted qemu-user-static qemu-user-binfmt arch-test \
+            debootstrap zerofree zip dosfstools libcap2-bin grep rsync \
+            xz-utils file git curl bc xxd kpartx libarchive-tools
+          # Make binfmt aware of arm64 emulation so the chroot can exec.
+          sudo update-binfmts --enable qemu-aarch64 || true
 
       - name: Clone pi-gen
         run: git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git
