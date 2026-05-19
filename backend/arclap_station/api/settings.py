@@ -426,17 +426,148 @@ async def storage_info(_: dict[str, Any] = Depends(require_session)) -> dict[str
 
 @router.get("/system")
 async def system_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
-    """Real Pi 5 hardware identity."""
+    """Real Pi 5 hardware identity + service / UPS / pairing state."""
     from arclap_station import __version__ as _arclap_version  # noqa: PLC0415
 
+    snap = snapshot()
+    station = get_station_store().load()
     return {
         "version": _arclap_version,
         "python": platform.python_version(),
         "platform": platform.platform(),
-        "snapshot": snapshot(),
+        "snapshot": snap,
         "hw_model": _hw_model(),
-        "hw_serial": _hw_serial(),
-        "uptime_seconds": snapshot().get("uptime_seconds", 0),
+        "hw_serial": _hw_serial() or station.serial,
+        "uptime_seconds": snap.get("uptime_seconds", 0),
+        "watchdog": _watchdog_state(),
+        "ups": _ups_state(),
+        "cloud": _cloud_state(station),
+        "firmware": _firmware_state(_arclap_version),
+    }
+
+
+def _watchdog_state() -> dict[str, Any]:
+    """Real watchdog status: hardware (kernel) + the cockpit's app watchdog."""
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    kernel = _P("/dev/watchdog").exists()
+    runtime_sec = 0
+    try:
+        r = subprocess.run(
+            ["systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        # Returns e.g. "30s" or "0" — strip and parse.
+        v = r.stdout.strip()
+        if v.endswith("s"):
+            runtime_sec = int(v[:-1])
+        elif v.isdigit():
+            runtime_sec = int(v)
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        pass
+    timer_active = False
+    cam_timer_active = False
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "arclap-watchdog.timer"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        timer_active = r.stdout.strip() == "active"
+        r2 = subprocess.run(
+            ["systemctl", "is-active", "arclap-camera-watchdog.timer"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        cam_timer_active = r2.stdout.strip() == "active"
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return {
+        "kernel_device": kernel,
+        "kernel_runtime_sec": runtime_sec,
+        "service_timer_active": timer_active,
+        "camera_timer_active": cam_timer_active,
+        "summary": (
+            "active"
+            if (kernel and runtime_sec > 0 and timer_active)
+            else "partial"
+            if (timer_active or kernel)
+            else "inactive"
+        ),
+    }
+
+
+def _ups_state() -> dict[str, Any]:
+    """Best-effort UPS probe via apcaccess (apcupsd) or upsc (NUT)."""
+    import subprocess  # noqa: PLC0415
+
+    # apcupsd
+    try:
+        r = subprocess.run(
+            ["apcaccess"], capture_output=True, text=True, timeout=3
+        )
+        if r.returncode == 0 and r.stdout:
+            charge: float | None = None
+            status_str = ""
+            for line in r.stdout.splitlines():
+                if line.startswith("BCHARGE"):
+                    try:
+                        charge = float(line.split(":", 1)[1].strip().split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith("STATUS"):
+                    status_str = line.split(":", 1)[1].strip()
+            return {
+                "detected": True,
+                "driver": "apcupsd",
+                "battery_pct": charge,
+                "status": status_str or "unknown",
+            }
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    # NUT
+    try:
+        r = subprocess.run(
+            ["upsc", "ups@localhost"], capture_output=True, text=True, timeout=3
+        )
+        if r.returncode == 0 and r.stdout:
+            return {
+                "detected": True,
+                "driver": "nut",
+                "battery_pct": None,
+                "status": "see upsc",
+            }
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return {"detected": False, "driver": None, "battery_pct": None, "status": "not detected"}
+
+
+def _cloud_state(station: Any) -> dict[str, Any]:
+    """Cloud pairing state derived from station.json + settings."""
+    s = get_settings()
+    broker = getattr(s, "mqtt_broker_url", None) or getattr(s, "cloud_broker_url", None)
+    cockpit = getattr(s, "cloud_base_url", None)
+    return {
+        "paired": bool(station.paired),
+        "broker": broker if station.paired else None,
+        "cockpit_url": cockpit if station.paired else None,
+        "pair_token_set": bool(station.pair_token),
+    }
+
+
+def _firmware_state(version: str) -> dict[str, Any]:
+    """Honest firmware metadata. No fake 'available: —'."""
+    return {
+        "current": version,
+        "channel": "manual",
+        "last_check": None,
+        "available": None,
+        "update_method": "sudo arclap-station-installer update",
     }
 
 

@@ -163,8 +163,19 @@ def sweep(force: bool = False) -> SweepReport:
                 break
 
     after_pct = disk_usage_pct(photos_root)
-    finished = datetime.now(UTC)
 
+    # DB hygiene — once we've deleted rows, give SQLite a chance to
+    # actually reclaim space. WAL checkpoint truncates the write-ahead
+    # log, and VACUUM rebuilds the main file. Both are no-ops if there's
+    # nothing to do, so it's safe to run every night.
+    try:
+        with db.connect() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("DB vacuum failed: %s", exc)
+
+    finished = datetime.now(UTC)
     report = SweepReport(
         started_at=now.isoformat(),
         finished_at=finished.isoformat(),

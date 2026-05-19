@@ -127,8 +127,18 @@ class _GPhoto2Backend:
         try:
             cam = self._ensure()
         except self._gp.GPhoto2Error as exc:
-            log.info("no camera detected: %s", exc)
-            return CameraInfo(detected=False)
+            # Stale handle — clear and try once more on a fresh init.
+            if self._cam is not None:
+                try:
+                    self._cam.exit()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._cam = None
+            try:
+                cam = self._ensure()
+            except self._gp.GPhoto2Error as exc2:
+                log.info("no camera detected: %s / %s", exc, exc2)
+                return CameraInfo(detected=False)
 
         try:
             summary = str(cam.get_summary())
@@ -165,10 +175,35 @@ class _GPhoto2Backend:
 
     def capture(self, dest_dir: Path) -> Path:
         gp = self._gp
-        cam = self._ensure()
-        file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+        try:
+            cam = self._ensure()
+            file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+        except gp.GPhoto2Error as exc:
+            # Stale handle (camera disconnected/reconnected since last init)
+            # → drop it and try once more on a fresh handle. After that
+            # surface the error.
+            log.info("camera capture failed (%s); reinitialising and retrying", exc)
+            try:
+                if self._cam is not None:
+                    self._cam.exit()
+            except Exception:  # noqa: BLE001
+                pass
+            self._cam = None
+            cam = self._ensure()
+            file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
         cam_file = cam.file_get(file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL)
+        # Filename-collision guard: the camera's internal counter resets
+        # across power cycles, so capt0000.jpg can recur. Suffix with a
+        # nanosecond stamp when the target already exists locally.
         target = dest_dir / file_path.name
+        if target.exists():
+            import time as _t  # noqa: PLC0415
+
+            stem, dot, ext = file_path.name.rpartition(".")
+            ns = _t.time_ns()
+            target = dest_dir / (
+                f"{stem or file_path.name}-{ns}{('.' + ext) if dot else ''}"
+            )
         cam_file.save(str(target))
         try:
             cam.file_delete(file_path.folder, file_path.name)

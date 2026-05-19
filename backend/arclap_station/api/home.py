@@ -39,7 +39,7 @@ def _build_snapshot() -> dict[str, Any]:
     destinations_warn = sum(1 for d in dests if d.last_error)
 
     next_fire = engine.next_fire_time()
-    # Resolve the host's primary LAN IP — used by the cockpit's URL bar.
+    # Real local IP via UDP-socket trick (no traffic, just route lookup).
     import socket as _socket  # noqa: PLC0415
 
     primary_ip = ""
@@ -52,11 +52,38 @@ def _build_snapshot() -> dict[str, Any]:
     finally:
         s.close()
 
+    # Time deltas derived from real sources.
+    next_capture_seconds: int | None = None
+    if next_fire is not None:
+        delta = (next_fire - now).total_seconds()
+        next_capture_seconds = max(0, int(delta))
+    last_ok = queue.last_ok_at()
+    last_sync_seconds_ago: int | None = None
+    if last_ok:
+        try:
+            last_ts = datetime.fromisoformat(last_ok.replace("Z", "+00:00"))
+            if last_ts.tzinfo is None:
+                last_ts = last_ts.replace(tzinfo=UTC)
+            last_sync_seconds_ago = max(0, int((now - last_ts).total_seconds()))
+        except ValueError:
+            pass
+
+    queue_stats = queue.stats()
+    queue_stats["avg_upload_seconds"] = queue.avg_upload_seconds()
+
+    captures_24h = photos.count_since(one_day_ago)
+    disk_pct = float(metrics.get("disk_used_pct") or 0)
+    status = _derive_status(
+        info.detected, dests, queue.pending_depth(), captures_24h, disk_pct,
+        metrics.get("uptime_seconds", 0),
+    )
+
     return {
         **metrics,
         "version": _version,
         "firmware": _version,
         "ip": primary_ip,
+        "status": status,
         "camera": {
             "detected": info.detected,
             "model": info.model,
@@ -68,20 +95,57 @@ def _build_snapshot() -> dict[str, Any]:
         "station": {
             "name": station.name,
             "hostname": station.hostname,
+            "serial": station.serial,
             "paired": station.paired,
+            "pair_token": station.pair_token,
             "first_boot_completed": station.first_boot_completed,
         },
         "scheduled_active": engine.active_count(),
         "next_fire": next_fire.isoformat() if next_fire else None,
+        "next_capture_seconds": next_capture_seconds,
+        "last_sync_seconds_ago": last_sync_seconds_ago,
         "captures_total": photos.count(),
-        "captures_24h": photos.count_since(one_day_ago),
+        "captures_24h": captures_24h,
         "queue_depth": queue.pending_depth(),
-        "queue_stats": queue.stats(),
+        "queue_stats": queue_stats,
+        "queue_pending": queue.pending_depth(),
+        "queue_failed": queue_stats.get("failed", 0) + queue_stats.get("failed_permanent", 0),
         "destinations_ok": destinations_ok,
         "destinations_warn": destinations_warn,
         "destinations_total": len(dests),
         "ts": now.isoformat(),
     }
+
+
+def _derive_status(
+    camera_detected: bool,
+    dests: list[Any],
+    queue_pending: int,
+    captures_24h: int,
+    disk_pct: float,
+    uptime_seconds: int,
+) -> str:
+    """Real station status derived from concrete signals. The cockpit's
+    top-right pill (and the 8 Camera Primary Statuses §12.9) need an
+    honest answer, not a hardcoded 'online'."""
+    # Service has been up too briefly for telemetry to be trusted.
+    if uptime_seconds < 30:
+        return "warn"
+    # Disk red zone.
+    if disk_pct > 95:
+        return "offline"
+    if disk_pct > 85:
+        return "warn"
+    # Destinations all failing.
+    if dests and all(d.last_error for d in dests if d.enabled):
+        return "warn"
+    # Queue stuck (200+ pending is a problem at 5-min schedule rate).
+    if queue_pending > 200:
+        return "warn"
+    # Camera should be detected during the work day on a configured station.
+    if not camera_detected:
+        return "warn"
+    return "online"
 
 
 @router.get("")

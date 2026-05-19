@@ -86,6 +86,48 @@ def disk_usage_pct(path: Path) -> float | None:
         return None
 
 
+# Cached counter snapshot from the last call to snapshot() — used to
+# compute the instantaneous network throughput as bytes-delta / elapsed.
+_LAST_NET: dict[str, Any] | None = None
+
+
+def network_throughput_mbps() -> float | None:
+    """Compute the host's aggregate TX+RX bandwidth in Mbps over the
+    interval since the previous call. Returns None on the first call
+    (we need at least two samples)."""
+    global _LAST_NET
+    try:
+        counters = psutil.net_io_counters(pernic=False)
+    except Exception:  # noqa: BLE001
+        return None
+    now = time.monotonic()
+    cur_bytes = counters.bytes_recv + counters.bytes_sent
+    prev = _LAST_NET
+    _LAST_NET = {"ts": now, "bytes": cur_bytes}
+    if prev is None:
+        return None
+    dt = max(0.001, now - prev["ts"])
+    dbytes = max(0, cur_bytes - prev["bytes"])
+    mbps = (dbytes * 8) / (1_000_000.0 * dt)
+    return round(mbps, 2)
+
+
+def disk_free_bytes(path: Path) -> int:
+    try:
+        target = path if path.exists() else Path(path.anchor or "/")
+        return int(shutil.disk_usage(target).free)
+    except OSError:
+        return 0
+
+
+def disk_total_bytes(path: Path) -> int:
+    try:
+        target = path if path.exists() else Path(path.anchor or "/")
+        return int(shutil.disk_usage(target).total)
+    except OSError:
+        return 0
+
+
 def snapshot() -> dict[str, Any]:
     settings = get_settings()
     try:
@@ -106,8 +148,12 @@ def snapshot() -> dict[str, Any]:
         "cpu_pct": round(psutil.cpu_percent(interval=None), 1),
         "mem_used_pct": mem_used_pct,
         "mem_total_mb": int(vm.total / (1024 * 1024)),
+        "mem_used_mb": int(vm.used / (1024 * 1024)),
         "disk_used_pct": disk_pct,
+        "disk_free_bytes": disk_free_bytes(photos_root),
+        "disk_total_bytes": disk_total_bytes(photos_root),
         "uptime_seconds": int(uptime_seconds()),
         "throttled_flags": throttled_flags(),
         "boot_time": int(psutil.boot_time()) if hasattr(psutil, "boot_time") else None,
+        "network_throughput_mbps": network_throughput_mbps(),
     }

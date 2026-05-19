@@ -76,3 +76,25 @@ def get_station_store() -> StationConfigStore:
 def reset_station_store() -> None:
     global _store
     _store = None
+
+
+def ensure_serial_from_cpu() -> None:
+    """If station.serial is empty, read the Pi's CPU serial and persist it.
+
+    Called on backend startup. Idempotent: existing serials are left
+    alone so the field acts as a one-time write."""
+    store = get_station_store()
+    cfg = store.load()
+    if cfg.serial:
+        return
+    serial = ""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("Serial"):
+                    serial = line.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        return
+    if serial:
+        store.update(serial=serial)

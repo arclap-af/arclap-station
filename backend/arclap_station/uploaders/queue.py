@@ -133,6 +133,33 @@ class UploadQueue:
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def last_ok_at(self) -> str | None:
+        """ISO timestamp of the most recent successful upload, or None."""
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(updated_at) FROM upload_queue WHERE state='ok'"
+            ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def avg_upload_seconds(self, window: int = 50) -> float:
+        """Average elapsed seconds (created_at → updated_at) over the last
+        `window` successful uploads. 0.0 if no data yet."""
+        with self._db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT (julianday(updated_at) - julianday(created_at)) * 86400.0 AS dt
+                FROM upload_queue
+                WHERE state='ok'
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, int(window)),),
+            ).fetchall()
+        if not rows:
+            return 0.0
+        vals = [float(r[0]) for r in rows if r[0] is not None and r[0] > 0]
+        return round(sum(vals) / len(vals), 2) if vals else 0.0
+
     # ----- worker loop --------------------------------------------------
 
     def start(self, n_workers: int = DEFAULT_WORKERS) -> None:

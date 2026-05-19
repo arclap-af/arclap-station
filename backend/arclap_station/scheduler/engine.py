@@ -48,6 +48,18 @@ class Schedule:
         return [d for d in self.days_csv.split(",") if d]
 
     def to_dict(self) -> dict[str, Any]:
+        # Resolve the actual next fire time from APScheduler for this
+        # specific job (different from engine.next_fire_time() which
+        # returns the soonest across all jobs).
+        next_at: str | None = None
+        try:
+            global _engine
+            if _engine is not None and _engine._scheduler is not None:
+                job = _engine._scheduler.get_job(self.id)
+                if job is not None and job.next_run_time is not None:
+                    next_at = job.next_run_time.isoformat()
+        except Exception:  # noqa: BLE001
+            pass
         return {
             "id": self.id,
             "name": self.name,
@@ -60,6 +72,7 @@ class Schedule:
             "conditions": self.conditions,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "next_fire_at": next_at,
         }
 
 

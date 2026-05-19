@@ -52,26 +52,41 @@ def emit(
         conn.execute("UPDATE audit_log SET hash=? WHERE id=?", (chain, new_id))
 
 
-def verify_chain(db: Database | None = None, limit: int = 1000) -> dict[str, Any]:
-    """Re-hash every row and report breaks. Returns {ok, breaks: [...]}."""
+def verify_chain(db: Database | None = None, page_size: int = 5000) -> dict[str, Any]:
+    """Re-hash EVERY row (paginated) and report breaks.
+
+    Previously this walked only the first 1000 rows — a tamperer could
+    edit anything past row 1000 and the verifier would still say OK.
+    Now we walk the whole table in `page_size` chunks, carrying the
+    running `prev_hash` across pages so the chain stays continuous.
+    """
     database = db or get_db()
-    with database.connect() as conn:
-        rows = conn.execute(
-            "SELECT id, ts, actor, event, details_json, prev_hash, hash "
-            "FROM audit_log ORDER BY id ASC LIMIT ?",
-            (limit,),
-        ).fetchall()
     breaks: list[dict[str, Any]] = []
     prev: str | None = None
-    for r in rows:
-        rid = int(r["id"])
-        if (r["prev_hash"] or None) != (prev or None):
-            breaks.append({"id": rid, "kind": "prev_mismatch"})
-        expect = _hash(prev, str(r["ts"]), str(r["actor"]), str(r["event"]), r["details_json"])
-        if str(r["hash"]) != expect:
-            breaks.append({"id": rid, "kind": "hash_mismatch"})
-        prev = str(r["hash"]) if r["hash"] else None
-    return {"ok": not breaks, "breaks": breaks, "checked": len(rows)}
+    last_id = 0
+    checked = 0
+    while True:
+        with database.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, ts, actor, event, details_json, prev_hash, hash "
+                "FROM audit_log WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (last_id, page_size),
+            ).fetchall()
+        if not rows:
+            break
+        for r in rows:
+            rid = int(r["id"])
+            if (r["prev_hash"] or None) != (prev or None):
+                breaks.append({"id": rid, "kind": "prev_mismatch"})
+            expect = _hash(
+                prev, str(r["ts"]), str(r["actor"]), str(r["event"]), r["details_json"]
+            )
+            if str(r["hash"]) != expect:
+                breaks.append({"id": rid, "kind": "hash_mismatch"})
+            prev = str(r["hash"]) if r["hash"] else None
+            last_id = rid
+            checked += 1
+    return {"ok": not breaks, "breaks": breaks, "checked": checked}
 
 
 def recent(limit: int = 100, db: Database | None = None) -> list[dict[str, Any]]:

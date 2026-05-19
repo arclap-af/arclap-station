@@ -25,6 +25,22 @@ export function Login() {
     }
   }, [session, navigate, next]);
 
+  // Live lockout countdown — backend exposes lockout_seconds_remaining
+  // on /auth/status. When >0 we disable input and show a timer.
+  const [lockoutLeft, setLockoutLeft] = useState<number>(
+    session?.lockout_seconds_remaining ?? 0,
+  );
+  useEffect(() => {
+    setLockoutLeft(session?.lockout_seconds_remaining ?? 0);
+  }, [session?.lockout_seconds_remaining]);
+  useEffect(() => {
+    if (lockoutLeft <= 0) return;
+    const t = setInterval(() => {
+      setLockoutLeft((v) => (v > 0 ? v - 1 : 0));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [lockoutLeft]);
+
   const login = useMutation({
     mutationFn: (code: string) => auth.login(code),
     onSuccess: (s) => {
@@ -32,7 +48,20 @@ export function Login() {
       navigate(next, { replace: true });
     },
     onError: (err) => {
-      const msg = err instanceof ApiError && err.status === 401 ? "Wrong PIN · try again" : "Login failed · try again";
+      let msg = "Login failed · try again";
+      if (err instanceof ApiError) {
+        if (err.status === 401) msg = "Wrong PIN · try again";
+        else if (err.status === 429) {
+          // Body may carry "locked out; retry in Ns" — parse N.
+          const detail =
+            err.body && typeof err.body === "object" && "detail" in err.body
+              ? String((err.body as { detail?: unknown }).detail ?? "")
+              : "";
+          const m = /retry in (\d+)/.exec(detail);
+          if (m) setLockoutLeft(parseInt(m[1], 10));
+          msg = "Too many wrong PIN attempts · locked out";
+        }
+      }
       setError(msg);
       setPin(["", "", "", "", "", ""]);
       refs.current[0]?.focus();
@@ -117,11 +146,26 @@ export function Login() {
               aria-label={`PIN digit ${i + 1}`}
               onChange={(e) => setDigit(i, e.target.value)}
               onKeyDown={(e) => onKey(i, e)}
-              disabled={login.isPending}
+              disabled={login.isPending || lockoutLeft > 0}
             />
           ))}
         </div>
-        {error && <div style={{ fontSize: 12, color: "var(--as-bad)", marginBottom: 10 }}>{error}</div>}
+        {lockoutLeft > 0 && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--as-warn)",
+              marginBottom: 10,
+              fontVariantNumeric: "tabular-nums",
+            }}
+            role="alert"
+          >
+            Locked out · retry in {Math.floor(lockoutLeft / 60)}m {lockoutLeft % 60}s
+          </div>
+        )}
+        {error && lockoutLeft === 0 && (
+          <div style={{ fontSize: 12, color: "var(--as-bad)", marginBottom: 10 }}>{error}</div>
+        )}
         {login.isPending && <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Verifying…</div>}
       </div>
     </div>

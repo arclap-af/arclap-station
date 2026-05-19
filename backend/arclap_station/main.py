@@ -42,6 +42,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings.paths.ensure()
     db = get_db()
     db.initialise()
+    # Populate station.serial from /proc/cpuinfo on first boot (idempotent).
+    try:
+        from arclap_station.station_config import ensure_serial_from_cpu  # noqa: PLC0415
+
+        ensure_serial_from_cpu()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not populate station serial: %s", exc)
     engine = get_engine()
     engine.hydrate_from_db()
     engine.start()
@@ -87,7 +94,46 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"ok": True, "version": __version__}
+        """Deep health probe used by the service watchdog AND any external
+        monitor. Returns ok=False (HTTP still 200) if any essential
+        subsystem looks unhealthy. Don't gate on auth — the loopback
+        watchdog needs to call this without a session cookie."""
+        from arclap_station.camera.adapter import get_adapter  # noqa: PLC0415
+        from arclap_station.db import get_db as _gdb  # noqa: PLC0415
+        from arclap_station.telemetry.metrics import snapshot as _snap  # noqa: PLC0415
+        from arclap_station.uploaders.queue import get_queue as _gq  # noqa: PLC0415
+
+        db_ok = True
+        try:
+            with _gdb().connect() as c:
+                c.execute("SELECT 1").fetchone()
+        except Exception:  # noqa: BLE001
+            db_ok = False
+        cam_detected = False
+        try:
+            cam_detected = bool(get_adapter().detect().detected)
+        except Exception:  # noqa: BLE001
+            cam_detected = False
+        try:
+            queue_depth = _gq().pending_depth()
+        except Exception:  # noqa: BLE001
+            queue_depth = -1
+        snap = {}
+        try:
+            snap = _snap()
+        except Exception:  # noqa: BLE001
+            pass
+        ok = db_ok and (snap.get("uptime_seconds", 0) > 0)
+        return {
+            "ok": ok,
+            "version": __version__,
+            "db_ok": db_ok,
+            "camera_detected": cam_detected,
+            "queue_pending": queue_depth,
+            "disk_used_pct": snap.get("disk_used_pct"),
+            "cpu_temp_c": snap.get("cpu_temp_c"),
+            "uptime_seconds": snap.get("uptime_seconds"),
+        }
 
     @app.get("/api/version")
     async def version() -> dict[str, Any]:
