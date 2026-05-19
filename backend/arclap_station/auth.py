@@ -155,21 +155,41 @@ class AuthManager:
 
     # ----- session token I/O --------------------------------------------
 
+    # Field separator inside the signed payload. We use '|' instead of ';'
+    # because RFC 6265 makes ';' a separator inside the Cookie header,
+    # which causes browsers to truncate the cookie value at the first ';'
+    # — even when the server quoted the value in Set-Cookie. Symptom: HTTP
+    # session works (curl preserves the quoted form) but WebSocket auth
+    # fails because the browser-sent cookie is truncated.
+    _SEP = "|"
+
     def _sign_session(self, ip: str) -> str:
-        payload = f"sub=arclap;ip={ip};iat={int(time.time())}"
+        payload = f"sub=arclap{self._SEP}ip={ip}{self._SEP}iat={int(time.time())}"
         return self._signer.sign(payload).decode("utf-8")
 
     def validate_session(self, token: str | None) -> dict[str, Any] | None:
         if not token:
             return None
+        # Some clients (curl, older Starlette versions) round-trip the
+        # cookie value with surrounding quotes; strip them defensively.
+        token = token.strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            token = token[1:-1]
         try:
             data = self._signer.unsign(
                 token.encode("utf-8"), max_age=self._settings.session_max_age_seconds
             )
         except (SignatureExpired, BadSignature):
             return None
+        decoded = data.decode("utf-8")
+        # Accept both the new '|'-delimited format and the legacy ';' one
+        # so existing sessions don't all die on upgrade.
+        if self._SEP in decoded:
+            parts = decoded.split(self._SEP)
+        else:
+            parts = decoded.split(";")
         out: dict[str, Any] = {}
-        for kv in data.decode("utf-8").split(";"):
+        for kv in parts:
             if "=" in kv:
                 k, v = kv.split("=", 1)
                 out[k] = v
