@@ -101,9 +101,9 @@ export function CameraProperties() {
                           {p.value}
                         </span>
                       )}
-                      <Pill tone={p.writable ? "ok" : "gray"}>{p.writable ? "RW" : "RO"}</Pill>
+                      <Pill tone={!p.readonly ? "ok" : "gray"}>{!p.readonly ? "RW" : "RO"}</Pill>
                       <div style={{ width: 90, flexShrink: 0, display: "flex", gap: 3, justifyContent: "flex-end" }}>
-                        {p.writable &&
+                        {!p.readonly &&
                           (editing === p.path ? (
                             <button
                               type="button"
@@ -127,7 +127,7 @@ export function CameraProperties() {
                               type="button"
                               onClick={() => {
                                 setEditing(p.path);
-                                setEditValue(p.value);
+                                setEditValue(p.value == null ? "" : String(p.value));
                               }}
                               style={{
                                 padding: "2px 7px",
