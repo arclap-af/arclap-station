@@ -307,42 +307,75 @@ fetch_release() {
     base_url="https://github.com/${ARCLAP_REPO}/releases/download/${ARCLAP_VERSION}"
   fi
 
-  local arch_tag="aarch64"
-  local wheel_glob="arclap_station-*-cp311-cp311-linux_${arch_tag}.whl"
-  local fallback_wheel="arclap_station-*-py3-none-any.whl"
-  local manifest_url="${base_url}/manifest.json"
   local frontend_tar="arclap-station-frontend.tar.gz"
 
   pushd "${ARCLAP_TMPDIR}" >/dev/null
 
-  # Manifest is optional — if present, it lists the wheels we should pull.
-  if curl --silent --fail --output manifest.json "${manifest_url}"; then
-    info "Fetched manifest.json"
-  else
-    warn "No manifest at ${manifest_url}; falling back to known filenames"
-  fi
-
-  # Pull the wheel. Try arch-specific first, then universal.
+  # Try pre-built artifacts first. If they're missing (release pipeline
+  # hasn't published this tag yet, or we're tracking an unreleased
+  # commit), fall through to build-from-source.
   local wheel_url="${base_url}/arclap-station-${ARCLAP_VERSION#v}-aarch64.whl"
-  if ! curl --silent --location --fail --output "wheel.whl" "${wheel_url}"; then
+  local got_wheel=0 got_frontend=0
+  if curl --silent --location --fail --output "wheel.whl" "${wheel_url}" 2>/dev/null; then
+    got_wheel=1
+    ok "Downloaded wheel ($(stat -c '%s' wheel.whl) bytes)"
+  else
     wheel_url="${base_url}/arclap-station-${ARCLAP_VERSION#v}-py3-none-any.whl"
-    if ! curl --silent --location --fail --output "wheel.whl" "${wheel_url}"; then
-      die "Could not download wheel from ${base_url}. Check the release page on GitHub."
+    if curl --silent --location --fail --output "wheel.whl" "${wheel_url}" 2>/dev/null; then
+      got_wheel=1
+      ok "Downloaded wheel ($(stat -c '%s' wheel.whl) bytes)"
     fi
   fi
-  ok "Downloaded wheel ($(stat -c '%s' wheel.whl) bytes)"
-
-  # Frontend bundle.
-  if ! curl --silent --location --fail --output "${frontend_tar}" \
-      "${base_url}/${frontend_tar}"; then
-    die "Could not download ${frontend_tar} from ${base_url}"
+  if curl --silent --location --fail --output "${frontend_tar}" \
+      "${base_url}/${frontend_tar}" 2>/dev/null; then
+    got_frontend=1
+    ok "Downloaded frontend bundle ($(stat -c '%s' "${frontend_tar}") bytes)"
   fi
-  ok "Downloaded frontend bundle ($(stat -c '%s' "${frontend_tar}") bytes)"
-
-  # Suppress unused-variable warnings for documentation locals.
-  : "${wheel_glob}" "${fallback_wheel}"
-
   popd >/dev/null
+
+  if [[ "${got_wheel}" == "1" && "${got_frontend}" == "1" ]]; then
+    return
+  fi
+
+  # ----- Build from source fallback -----
+  warn "Pre-built artifacts missing — building from source."
+  info "Adds ~3 min on a Pi 5: clone, pip wheel, npm build."
+
+  # Pull in build deps not in the base list.
+  export DEBIAN_FRONTEND=noninteractive
+  local build_deps=(git build-essential nodejs npm)
+  apt-get install -y --no-install-recommends "${build_deps[@]}" \
+      || die "Could not install source-build deps (${build_deps[*]})"
+
+  local src="${ARCLAP_TMPDIR}/src"
+  if [[ -d "${src}/.git" ]]; then
+    git -C "${src}" fetch --depth 1 origin "${ARCLAP_VERSION}" 2>/dev/null \
+      || git -C "${src}" fetch --depth 1 origin main
+    git -C "${src}" checkout FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/${ARCLAP_REPO}.git" "${src}" \
+        || die "Could not clone source from https://github.com/${ARCLAP_REPO}.git"
+  fi
+  ok "Cloned source"
+
+  # Build the wheel.
+  local build_venv="${ARCLAP_TMPDIR}/build-venv"
+  if [[ ! -x "${build_venv}/bin/python" ]]; then
+    "${ARCLAP_PYTHON}" -m venv "${build_venv}"
+  fi
+  "${build_venv}/bin/pip" install --upgrade --quiet pip build
+  "${build_venv}/bin/python" -m build --wheel --outdir "${ARCLAP_TMPDIR}/wheels" "${src}/backend" \
+      || die "Wheel build failed; see /var/log/arclap-install.log"
+  cp "${ARCLAP_TMPDIR}/wheels/"arclap_station-*.whl "${ARCLAP_TMPDIR}/wheel.whl"
+  ok "Built wheel from source ($(stat -c '%s' "${ARCLAP_TMPDIR}/wheel.whl") bytes)"
+
+  # Build the frontend.
+  pushd "${src}/frontend" >/dev/null
+  npm ci --silent || npm install --silent
+  npm run build --silent
+  tar -C dist -czf "${ARCLAP_TMPDIR}/${frontend_tar}" .
+  popd >/dev/null
+  ok "Built frontend bundle ($(stat -c '%s' "${ARCLAP_TMPDIR}/${frontend_tar}") bytes)"
 }
 
 # ---------------------------------------------------------------------------
