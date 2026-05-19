@@ -309,23 +309,36 @@ fetch_release() {
 
   local frontend_tar="arclap-station-frontend.tar.gz"
 
+  # Wheels land in ARCLAP_TMPDIR/wheels/ with their PEP 427-compliant
+  # filenames intact (pip rejects non-conforming names like "wheel.whl").
+  # install_backend() and update_inplace() use arclap_wheel_path() to
+  # locate whatever ended up there, regardless of source.
+  mkdir -p "${ARCLAP_TMPDIR}/wheels"
+
   pushd "${ARCLAP_TMPDIR}" >/dev/null
 
-  # Try pre-built artifacts first. If they're missing (release pipeline
-  # hasn't published this tag yet, or we're tracking an unreleased
-  # commit), fall through to build-from-source.
-  local wheel_url="${base_url}/arclap-station-${ARCLAP_VERSION#v}-aarch64.whl"
+  # Try pre-built release artifacts first. If they're missing (release
+  # pipeline hasn't published this tag yet, or we're tracking an
+  # unreleased commit), fall through to build-from-source. We probe a
+  # handful of plausible PEP 427 filenames because the release matrix
+  # may publish under any of them and we don't get a directory listing.
+  local version="${ARCLAP_VERSION#v}"
+  local wheel_candidates=(
+    "arclap_station-${version}-py3-none-any.aarch64.whl"
+    "arclap_station-${version}-py3-none-any.whl"
+    "arclap_station-${version}-cp313-cp313-linux_aarch64.whl"
+    "arclap_station-${version}-cp312-cp312-linux_aarch64.whl"
+    "arclap_station-${version}-cp311-cp311-linux_aarch64.whl"
+  )
   local got_wheel=0 got_frontend=0
-  if curl --silent --location --fail --output "wheel.whl" "${wheel_url}" 2>/dev/null; then
-    got_wheel=1
-    ok "Downloaded wheel ($(stat -c '%s' wheel.whl) bytes)"
-  else
-    wheel_url="${base_url}/arclap-station-${ARCLAP_VERSION#v}-py3-none-any.whl"
-    if curl --silent --location --fail --output "wheel.whl" "${wheel_url}" 2>/dev/null; then
+  for name in "${wheel_candidates[@]}"; do
+    if curl --silent --location --fail --output "wheels/${name}" \
+        "${base_url}/${name}" 2>/dev/null; then
       got_wheel=1
-      ok "Downloaded wheel ($(stat -c '%s' wheel.whl) bytes)"
+      ok "Downloaded ${name} ($(stat -c '%s' "wheels/${name}") bytes)"
+      break
     fi
-  fi
+  done
   if curl --silent --location --fail --output "${frontend_tar}" \
       "${base_url}/${frontend_tar}" 2>/dev/null; then
     got_frontend=1
@@ -364,10 +377,15 @@ fetch_release() {
     "${ARCLAP_PYTHON}" -m venv "${build_venv}"
   fi
   "${build_venv}/bin/pip" install --upgrade --quiet pip build
+  # `python -m build` writes the wheel into wheels/ with its PEP 427
+  # filename (e.g. arclap_station-0.1.0-py3-none-any.whl). We DO NOT
+  # rename it — pip refuses non-conforming names.
   "${build_venv}/bin/python" -m build --wheel --outdir "${ARCLAP_TMPDIR}/wheels" "${src}/backend" \
       || die "Wheel build failed; see /var/log/arclap-install.log"
-  cp "${ARCLAP_TMPDIR}/wheels/"arclap_station-*.whl "${ARCLAP_TMPDIR}/wheel.whl"
-  ok "Built wheel from source ($(stat -c '%s' "${ARCLAP_TMPDIR}/wheel.whl") bytes)"
+  local built_wheel
+  built_wheel="$(ls -1 "${ARCLAP_TMPDIR}/wheels/"arclap_station-*.whl 2>/dev/null | head -n1)"
+  [[ -z "${built_wheel}" ]] && die "Wheel build produced no .whl in ${ARCLAP_TMPDIR}/wheels/"
+  ok "Built wheel from source: $(basename "${built_wheel}") ($(stat -c '%s' "${built_wheel}") bytes)"
 
   # Build the frontend.
   pushd "${src}/frontend" >/dev/null
@@ -395,9 +413,12 @@ install_backend() {
 
   "${venv}/bin/pip" install --upgrade --quiet pip setuptools wheel
 
-  # Install the downloaded wheel. --force-reinstall lets re-runs upgrade in place.
-  "${venv}/bin/pip" install --upgrade --force-reinstall --quiet "${ARCLAP_TMPDIR}/wheel.whl"
-  ok "Installed wheel into venv"
+  # Install the wheel (PEP 427 filename preserved by fetch_release()).
+  # --force-reinstall lets re-runs upgrade in place.
+  local wheel
+  wheel="$(arclap_wheel_path)"
+  "${venv}/bin/pip" install --upgrade --force-reinstall --quiet "${wheel}"
+  ok "Installed $(basename "${wheel}") into venv"
 
   # CLI shim — single shared name regardless of internal naming.
   if [[ -x "${venv}/bin/arclap-station" ]]; then
@@ -620,6 +641,19 @@ install_self() {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+arclap_wheel_path() {
+  # Locate the wheel produced by fetch_release(). Lives in
+  # ${ARCLAP_TMPDIR}/wheels/ with its PEP 427-compliant filename intact,
+  # regardless of whether it was downloaded from a release or built from
+  # source. Exits the installer if no wheel was produced.
+  local wheel
+  wheel="$(ls -1 "${ARCLAP_TMPDIR}/wheels/"arclap_station-*.whl 2>/dev/null | head -n1)"
+  if [[ -z "${wheel}" ]]; then
+    die "No wheel found under ${ARCLAP_TMPDIR}/wheels/ — fetch_release() did not produce one."
+  fi
+  printf '%s' "${wheel}"
+}
+
 short_serial() {
   # 8 lowercase hex chars from the CPU serial — fall back to mac address.
   local serial=""
@@ -674,6 +708,7 @@ uninstall_all() {
 
 update_inplace() {
   preflight
+  install_apt_deps    # ensures pick_python() runs so ARCLAP_PYTHON is set
   fetch_release
 
   # Side-by-side venv at /opt/arclap-station/releases/<version> and swap a symlink.
@@ -681,7 +716,9 @@ update_inplace() {
   install -d -m 0755 "${target}"
   "${ARCLAP_PYTHON}" -m venv "${target}/venv"
   "${target}/venv/bin/pip" install --upgrade --quiet pip
-  "${target}/venv/bin/pip" install --quiet "${ARCLAP_TMPDIR}/wheel.whl"
+  local wheel
+  wheel="$(arclap_wheel_path)"
+  "${target}/venv/bin/pip" install --quiet "${wheel}"
 
   ln -sfn "${target}/venv" "${ARCLAP_PREFIX}/venv.next"
   mv -Tf "${ARCLAP_PREFIX}/venv.next" "${ARCLAP_PREFIX}/venv"
