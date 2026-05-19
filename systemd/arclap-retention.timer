@@ -1,0 +1,19 @@
+[Unit]
+Description=Arclap Station — fire the retention sweep daily at 03:15 local
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Timer]
+# Daily at 03:15 local time. 03:15 because:
+#   - past the magic 02:00–03:00 DST jump window
+#   - well after the typical late-evening shoot window (06:00–19:00)
+#   - well before workers arrive at 06:00–07:00
+OnCalendar=*-*-* 03:15:00
+# Tolerate up to 30 min of jitter so we don't all hammer the disk at the
+# same wall-clock moment across a 100-station fleet.
+RandomizedDelaySec=1800
+# Persistent: catch up if the Pi was off when the timer should have fired.
+Persistent=true
+Unit=arclap-retention.service
+
+[Install]
+WantedBy=timers.target

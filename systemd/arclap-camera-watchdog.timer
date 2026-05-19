@@ -1,0 +1,16 @@
+[Unit]
+Description=Arclap Station — fire the camera watchdog every 2 minutes
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Timer]
+# First fire 3 minutes after boot, so the backend has time to settle
+# and open its PTP session before we start probing.
+OnBootSec=180s
+OnUnitActiveSec=120s
+AccuracySec=10s
+# Don't queue a backlog if the Pi was suspended or the timer was disabled.
+Persistent=false
+Unit=arclap-camera-watchdog.service
+
+[Install]
+WantedBy=timers.target

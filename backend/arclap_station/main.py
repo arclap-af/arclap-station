@@ -112,6 +112,14 @@ def cli(argv: list[str] | None = None) -> int:
 
     sub.add_parser("healthcheck", help="probe local /api/health")
     sub.add_parser("version", help="print version and exit")
+    sub.add_parser(
+        "camera-watchdog",
+        help="run one camera USB watchdog probe (intended for the systemd timer)",
+    )
+    sub.add_parser(
+        "retention-sweep",
+        help="enforce disk-retention policy (intended for the systemd timer)",
+    )
 
     args = parser.parse_args(argv)
     cmd = args.cmd or "serve"
@@ -119,6 +127,16 @@ def cli(argv: list[str] | None = None) -> int:
     if cmd == "version":
         print(__version__)
         return 0
+
+    if cmd == "camera-watchdog":
+        from arclap_station.watchdog.camera import run as run_camera_watchdog  # noqa: PLC0415
+
+        return run_camera_watchdog()
+
+    if cmd == "retention-sweep":
+        from arclap_station.retention.policy import run as run_retention  # noqa: PLC0415
+
+        return run_retention()
 
     if cmd == "healthcheck":
         import httpx  # noqa: PLC0415

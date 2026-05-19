@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # Current schema version. Bump when adding a migration.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -173,22 +173,52 @@ class Database:
                 raise
 
     def initialise(self) -> None:
-        """Apply schema. Idempotent.
+        """Apply schema and forward-only migrations. Idempotent.
 
         We can't run executescript() inside an explicit BEGIN — it issues its
         own COMMITs and the outer ROLLBACK would fail. So we apply the schema
-        outside a transaction and then bump schema_version in one.
+        outside a transaction and then run migrations + bump schema_version
+        in one.
         """
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply forward-only column-level migrations.
+
+        SQLite's CREATE TABLE IF NOT EXISTS won't add columns to a table
+        that's already there, so we add idempotent ALTER TABLE statements
+        here for every schema bump.
+        """
         with self.tx() as conn:
             row = conn.execute(
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()
+            current = int(row[0]) if row else 0
+            # v0 → v1 → v2 migration ladder. New steps go at the bottom.
+            if current < 2:
+                # Add `starred` to photos (retention policy gate).
+                existing = {
+                    r[1] for r in conn.execute("PRAGMA table_info(photos)").fetchall()
+                }
+                if "starred" not in existing:
+                    conn.execute(
+                        "ALTER TABLE photos ADD COLUMN starred INTEGER NOT NULL DEFAULT 0"
+                    )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_photos_starred ON photos(starred)"
+                )
+            # Write the new version.
             if row is None:
                 conn.execute(
                     "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?)",
+                    (str(SCHEMA_VERSION),),
+                )
+            else:
+                conn.execute(
+                    "UPDATE schema_meta SET value=? WHERE key='schema_version'",
                     (str(SCHEMA_VERSION),),
                 )
 

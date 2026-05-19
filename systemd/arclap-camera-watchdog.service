@@ -1,0 +1,35 @@
+[Unit]
+Description=Arclap Station — camera USB watchdog probe (oneshot)
+After=arclap-station.service
+# Don't bind lifecycle — the timer fires us independently. Bug-bait avoided.
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Service]
+Type=oneshot
+# Root because we need to write to /sys/bus/usb/devices/*/authorized.
+# udev rules can grant plugdev access for some Pi kernels, but sysfs
+# `authorized` is not granted by the libgphoto2 udev rule, so we keep
+# this oneshot privileged. The blast radius is limited: 30s max runtime,
+# no network, no inbound surface.
+User=root
+Group=root
+Environment=PYTHONUNBUFFERED=1
+Environment=ARCLAP_CONF_DIR=/etc/arclap
+Environment=ARCLAP_STATE_DIR=/var/lib/arclap
+Environment=ARCLAP_PHOTO_DIR=/media/sdcard/photos
+Environment=ARCLAP_LOG_DIR=/var/log/arclap
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station camera-watchdog
+TimeoutStartSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arclap-camera-watchdog
+
+# Minimum hardening — we need sysfs writes so we can't lock down too much.
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

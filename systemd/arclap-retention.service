@@ -1,0 +1,31 @@
+[Unit]
+Description=Arclap Station — disk retention sweep (oneshot)
+After=arclap-station.service
+Documentation=https://github.com/arclap-af/arclap-station
+
+[Service]
+Type=oneshot
+User=arclap
+Group=arclap
+Environment=PYTHONUNBUFFERED=1
+Environment=ARCLAP_CONF_DIR=/etc/arclap
+Environment=ARCLAP_STATE_DIR=/var/lib/arclap
+Environment=ARCLAP_PHOTO_DIR=/media/sdcard/photos
+Environment=ARCLAP_LOG_DIR=/var/log/arclap
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station retention-sweep
+TimeoutStartSec=300
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arclap-retention
+
+# Hardening — we only need read of the DB and unlink under /media/sdcard.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/arclap /var/log/arclap /media/sdcard/photos /etc/arclap
+
+[Install]
+WantedBy=multi-user.target

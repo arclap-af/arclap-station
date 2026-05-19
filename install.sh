@@ -582,10 +582,14 @@ install_systemd() {
     die "Asset tree at ${assets} has no systemd/ directory — repo layout changed?"
   fi
 
-  install -m 0644 "${src}/arclap-station.service"  /etc/systemd/system/arclap-station.service
-  install -m 0644 "${src}/arclap-station.socket"   /etc/systemd/system/arclap-station.socket
-  install -m 0644 "${src}/arclap-watchdog.service" /etc/systemd/system/arclap-watchdog.service
-  install -m 0644 "${src}/arclap-watchdog.timer"   /etc/systemd/system/arclap-watchdog.timer
+  install -m 0644 "${src}/arclap-station.service"           /etc/systemd/system/arclap-station.service
+  install -m 0644 "${src}/arclap-station.socket"            /etc/systemd/system/arclap-station.socket
+  install -m 0644 "${src}/arclap-watchdog.service"          /etc/systemd/system/arclap-watchdog.service
+  install -m 0644 "${src}/arclap-watchdog.timer"            /etc/systemd/system/arclap-watchdog.timer
+  install -m 0644 "${src}/arclap-camera-watchdog.service"   /etc/systemd/system/arclap-camera-watchdog.service
+  install -m 0644 "${src}/arclap-camera-watchdog.timer"     /etc/systemd/system/arclap-camera-watchdog.timer
+  install -m 0644 "${src}/arclap-retention.service"         /etc/systemd/system/arclap-retention.service
+  install -m 0644 "${src}/arclap-retention.timer"           /etc/systemd/system/arclap-retention.timer
   # arclap-uploader.service is deliberately NOT deployed — its
   # ExecStart calls a non-existent `arclap-station uploader` subcommand.
   # The uploader queue runs in-process via FastAPI lifespan, so the
@@ -684,6 +688,8 @@ enable_services() {
     caddy
     avahi-daemon
     arclap-station.service
+    arclap-camera-watchdog.timer
+    arclap-retention.timer
   )
   local failed=()
   for u in "${units[@]}"; do
