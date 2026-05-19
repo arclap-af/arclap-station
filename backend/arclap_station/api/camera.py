@@ -92,6 +92,12 @@ async def properties(_: dict[str, Any] = Depends(require_session)) -> dict[str, 
 
 @router.websocket("/preview-ws")
 async def preview_ws(ws: WebSocket, fps: int = Query(default=10, ge=2, le=15)) -> None:
+    from arclap_station.api.deps import require_ws_session  # noqa: PLC0415
+
+    sess = await require_ws_session(ws)
+    if sess is None:
+        await ws.close(code=1008)
+        return
     await ws.accept()
     await serve_preview_ws(ws, fps=fps)
 

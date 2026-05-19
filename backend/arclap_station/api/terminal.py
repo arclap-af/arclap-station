@@ -24,6 +24,13 @@ async def terminal_info() -> dict[str, object]:
 
 @router.websocket("/ws")
 async def terminal_ws(ws: WebSocket) -> None:
+    # Auth BEFORE accept — the terminal is the highest-risk surface.
+    from arclap_station.api.deps import require_ws_session  # noqa: PLC0415
+
+    sess = await require_ws_session(ws)
+    if sess is None:
+        await ws.close(code=1008)
+        return
     await ws.accept()
     try:
         pty = RestrictedPTY()

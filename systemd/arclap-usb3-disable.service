@@ -1,0 +1,23 @@
+[Unit]
+Description=Disable Pi 5 USB 3.0 controllers (Canon DSLR PTP workaround)
+DefaultDependencies=no
+After=systemd-udev-trigger.service
+Before=arclap-station.service
+Documentation=https://github.com/arclap-af/arclap-station
+
+# WHY: Canon 5D Mark IV (and many USB3-capable DSLRs) negotiate SuperSpeed
+# when plugged into a USB 3 receptacle on the Pi 5. libgphoto2's PTP/USB
+# transport then hits "PTP I/O Error" trying to open a session. Disabling
+# the SuperSpeed root hubs (bus3 + bus5) forces the camera to enumerate on
+# the USB 2 companion controllers (bus2 + bus4) where PTP works reliably.
+#
+# Trade-off: USB 3 storage / docks no longer reach SS speeds on this Pi.
+# For a single-purpose camera station that's the right call.
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for hub in /sys/bus/usb/devices/usb3 /sys/bus/usb/devices/usb5; do if [ -w "$hub/authorized" ]; then echo 0 > "$hub/authorized" || true; fi; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

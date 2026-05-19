@@ -52,3 +52,28 @@ def require_first_boot() -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="setup already complete",
         )
+
+
+async def require_ws_session(ws: Any) -> dict[str, Any] | None:
+    """Authenticate a WebSocket via the session cookie BEFORE accepting.
+
+    Returns the session payload on success, or None if the caller should
+    reject (the handler should close with code 1008). FastAPI's
+    Depends() doesn't work with WebSocket pre-accept reliably, so this
+    is called manually from each handler — keep it small and explicit.
+    """
+    cookie_header = ws.headers.get("cookie", "") if ws.headers else ""
+    token: str | None = None
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if part.startswith(SESSION_COOKIE + "="):
+            token = part[len(SESSION_COOKIE) + 1 :]
+            break
+    # Also accept ?session=… on the query string for environments where the
+    # cookie can't be set (e.g. Native apps proxying via OAuth flow).
+    if token is None and "session" in ws.query_params:
+        token = ws.query_params.get("session")
+    if not token:
+        return None
+    auth = AuthManager()
+    return auth.validate_session(token)

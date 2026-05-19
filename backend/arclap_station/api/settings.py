@@ -103,6 +103,12 @@ async def audit_recent(
 
 @router.websocket("/logs-ws")
 async def logs_ws(ws: WebSocket) -> None:
+    from arclap_station.api.deps import require_ws_session  # noqa: PLC0415
+
+    sess = await require_ws_session(ws)
+    if sess is None:
+        await ws.close(code=1008)
+        return
     await ws.accept()
     try:
         async for line in follow_journal():

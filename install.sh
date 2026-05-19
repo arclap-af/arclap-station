@@ -187,6 +187,10 @@ install_apt_deps() {
     libffi-dev
     libssl-dev
     zlib1g-dev
+    zram-tools
+    ufw
+    fail2ban
+    logrotate
     libjpeg-dev
     libtiff-dev
     libwebp-dev
@@ -590,6 +594,7 @@ install_systemd() {
   install -m 0644 "${src}/arclap-camera-watchdog.timer"     /etc/systemd/system/arclap-camera-watchdog.timer
   install -m 0644 "${src}/arclap-retention.service"         /etc/systemd/system/arclap-retention.service
   install -m 0644 "${src}/arclap-retention.timer"           /etc/systemd/system/arclap-retention.timer
+  install -m 0644 "${src}/arclap-usb3-disable.service"      /etc/systemd/system/arclap-usb3-disable.service
   # arclap-uploader.service is deliberately NOT deployed — its
   # ExecStart calls a non-existent `arclap-station uploader` subcommand.
   # The uploader queue runs in-process via FastAPI lifespan, so the
@@ -687,6 +692,7 @@ enable_services() {
   local units=(
     caddy
     avahi-daemon
+    arclap-usb3-disable.service
     arclap-station.service
     arclap-camera-watchdog.timer
     arclap-retention.timer
@@ -762,24 +768,121 @@ print_banner() {
 install_self() {
   step 14 "Wiring install.sh into /usr/local/sbin for uninstall/update"
 
-  # Copy install.sh to a stable location so `sudo arclap-station-installer
-  # uninstall` / `update` work after the wheel rotates. When the script
-  # was streamed via `curl | sudo bash`, $0 is just `bash` — so we prefer
-  # the install.sh inside the asset tree (cloned by fetch_release()) and
-  # only fall back to $0 if it's a real file.
+  # Copy install.sh to a stable location so the operator can run
+  # `sudo /usr/local/sbin/arclap-station-installer uninstall` / `update`
+  # after the wheel rotates. We FAIL the install if we can't land a
+  # real installer here — the operator-facing recovery path depends on it.
   local assets src=""
   assets="$(arclap_assets_dir)"
   if [[ -f "${assets}/install.sh" ]]; then
     src="${assets}/install.sh"
-  elif [[ -f "$0" ]]; then
+  elif [[ -f "$0" && "$(basename "$0")" == "install.sh" ]]; then
     src="$0"
   fi
   if [[ -z "${src}" ]]; then
-    warn "Could not locate install.sh source — skipping self-copy. update/uninstall sub-commands won't work until you re-run from a clone."
-    return
+    die "Could not locate install.sh source for self-copy. The asset tree at ${assets} must contain install.sh. Update/uninstall depend on it — refusing to finish with the recovery path broken."
   fi
   install -m 0755 "${src}" /usr/local/sbin/arclap-station-installer
   ok "Installer self-copied to /usr/local/sbin/arclap-station-installer (source: ${src})"
+}
+
+# ---------------------------------------------------------------------------
+# 8b. OS hardening drop-ins (audit-driven: kernel watchdog, swap, journald
+#     limits, SSH lockdown, firewall, logrotate). Step number is between
+#     8 and 9 of the install banner so it pollutes the existing flow least.
+#     This is its own callable function — install() invokes it after udev.
+# ---------------------------------------------------------------------------
+install_os_hardening() {
+  step 8 "Applying OS hardening (kernel watchdog, swap, journald, SSH, firewall)"
+
+  # 1. Kernel hardware watchdog. Pi 5 firmware enables /dev/watchdog when
+  #    dtparam=watchdog=on; systemd-as-PID-1 pets it when configured.
+  install -d -m 0755 /etc/systemd/system.conf.d
+  cat > /etc/systemd/system.conf.d/10-arclap-watchdog.conf <<EOF
+[Manager]
+RuntimeWatchdogSec=30
+RebootWatchdogSec=2min
+EOF
+  systemctl daemon-reexec || true
+
+  # 2. zram-backed swap (1 GB) — OOM safety net on the 8 GB Pi 5.
+  install -d -m 0755 /etc/default
+  cat > /etc/default/zramswap <<'EOF'
+# Arclap Station: zram swap configuration
+ALGO=zstd
+PERCENT=12
+PRIORITY=100
+EOF
+  systemctl enable --now zramswap 2>/dev/null || true
+
+  # 3. journald limits — without this the journal eats 10% of root forever.
+  install -d -m 0755 /etc/systemd/journald.conf.d
+  cat > /etc/systemd/journald.conf.d/10-arclap.conf <<EOF
+[Journal]
+SystemMaxUse=500M
+SystemKeepFree=2G
+MaxFileSec=1week
+RateLimitIntervalSec=30s
+RateLimitBurst=10000
+EOF
+  systemctl kill --kill-who=main --signal=SIGUSR2 systemd-journald 2>/dev/null || true
+
+  # 4. logrotate for /var/log/arclap (our service emits to journal by
+  #    default, but any local handler that writes a .log file is covered).
+  install -d -m 0755 /etc/logrotate.d
+  cat > /etc/logrotate.d/arclap <<'EOF'
+/var/log/arclap/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su root root
+}
+EOF
+
+  # 5. SSH hardening drop-in.
+  install -d -m 0755 /etc/ssh/sshd_config.d
+  cat > /etc/ssh/sshd_config.d/99-arclap.conf <<'EOF'
+# Arclap Station — field-deployment SSH lockdown.
+PasswordAuthentication no
+PermitRootLogin no
+MaxAuthTries 3
+ClientAliveInterval 300
+ClientAliveCountMax 2
+EOF
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+
+  # 6. fail2ban default sshd jail (zero config — distro defaults are fine).
+  systemctl enable --now fail2ban 2>/dev/null || true
+
+  # 7. ufw firewall: allow ssh, http, https, mDNS, then default-deny.
+  if command -v ufw >/dev/null 2>&1; then
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw allow 22/tcp >/dev/null 2>&1 || true
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 443/tcp >/dev/null 2>&1 || true
+    ufw allow 5353/udp >/dev/null 2>&1 || true
+    ufw default deny incoming >/dev/null 2>&1 || true
+    ufw default allow outgoing >/dev/null 2>&1 || true
+    ufw --force enable >/dev/null 2>&1 || true
+  fi
+
+  # 8. resolved fallback DNS so a flaky DHCP DNS doesn't blackhole us.
+  install -d -m 0755 /etc/systemd/resolved.conf.d
+  cat > /etc/systemd/resolved.conf.d/99-arclap.conf <<'EOF'
+[Resolve]
+FallbackDNS=9.9.9.9 1.1.1.1 8.8.8.8
+DNSStubListener=yes
+EOF
+  systemctl restart systemd-resolved 2>/dev/null || true
+
+  # 9. systemd-time-wait-sync — the app refuses to start until clock is sane.
+  systemctl enable systemd-time-wait-sync.service 2>/dev/null || true
+
+  ok "OS hardening applied"
 }
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1045,7 @@ main() {
       install_backend
       install_frontend
       install_udev
+      install_os_hardening   # NEW: kernel watchdog, swap, journald, SSH, ufw
       install_systemd
       install_caddy
       install_avahi

@@ -112,7 +112,54 @@ def _file_envelope_key() -> bytes:
     return f.read_bytes()
 
 
+def _fernet() -> Any:
+    """Build a Fernet key from the 32-byte envelope key.
+
+    The envelope key is 32 raw bytes from keyring or `/etc/arclap/dest.key`;
+    Fernet expects 32-byte url-safe-base64. We derive deterministically so
+    the same envelope key always produces the same Fernet — meaning
+    existing rows decrypt across restarts without re-keying.
+    """
+    from cryptography.fernet import Fernet  # noqa: PLC0415
+
+    raw = _envelope_key()
+    # Fernet expects exactly 32 bytes url-safe-base64-encoded.
+    fkey = base64.urlsafe_b64encode(raw[:32].ljust(32, b"\x00"))
+    return Fernet(fkey)
+
+
+def encrypt_config(config: dict[str, Any]) -> str:
+    raw = json.dumps(config).encode("utf-8")
+    try:
+        token = _fernet().encrypt(raw)
+        # Tag with "f1:" so decrypt knows it's the new format.
+        return "f1:" + token.decode("ascii")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Fernet encrypt failed (%s); falling back to legacy XOR", exc)
+        return _xor_b64(raw)
+
+
+def decrypt_config(blob: str) -> dict[str, Any]:
+    # New format: "f1:<fernet-token>"
+    if blob.startswith("f1:"):
+        try:
+            raw = _fernet().decrypt(blob[3:].encode("ascii"))
+            return cast(dict[str, Any], json.loads(raw.decode("utf-8")))
+        except Exception as exc:  # noqa: BLE001
+            log.error("Fernet decrypt failed: %s — config will be empty", exc)
+            return {}
+    # Legacy XOR (pre-v0.2) — read once, callers should re-save to upgrade.
+    try:
+        key = _envelope_key()
+        raw = _xor(base64.b64decode(blob.encode("ascii")), key)
+        return cast(dict[str, Any], json.loads(raw.decode("utf-8")))
+    except Exception as exc:  # noqa: BLE001
+        log.error("legacy XOR decrypt failed: %s — config will be empty", exc)
+        return {}
+
+
 def _xor(data: bytes, key: bytes) -> bytes:
+    """Legacy XOR — kept ONLY to decrypt pre-v0.2 stored configs."""
     if not key:
         return data
     out = bytearray(len(data))
@@ -121,19 +168,8 @@ def _xor(data: bytes, key: bytes) -> bytes:
     return bytes(out)
 
 
-def encrypt_config(config: dict[str, Any]) -> str:
-    key = _envelope_key()
-    raw = json.dumps(config).encode("utf-8")
-    return base64.b64encode(_xor(raw, key)).decode("ascii")
-
-
-def decrypt_config(blob: str) -> dict[str, Any]:
-    key = _envelope_key()
-    try:
-        raw = _xor(base64.b64decode(blob.encode("ascii")), key)
-        return cast(dict[str, Any], json.loads(raw.decode("utf-8")))
-    except Exception:  # noqa: BLE001
-        return {}
+def _xor_b64(raw: bytes) -> str:
+    return base64.b64encode(_xor(raw, _envelope_key())).decode("ascii")
 
 
 class DestinationManager:

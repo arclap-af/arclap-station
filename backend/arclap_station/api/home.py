@@ -73,6 +73,13 @@ async def home_snapshot(_: dict[str, Any] = Depends(require_session)) -> dict[st
 
 @router.websocket("/ws")
 async def home_ws(ws: WebSocket) -> None:
+    # Gate BEFORE accept so unauthenticated clients can't see telemetry.
+    from arclap_station.api.deps import require_ws_session  # noqa: PLC0415
+
+    sess = await require_ws_session(ws)
+    if sess is None:
+        await ws.close(code=1008)  # 1008 = policy violation
+        return
     await ws.accept()
     try:
         while True:

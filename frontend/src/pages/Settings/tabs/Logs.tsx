@@ -32,7 +32,7 @@ export function Logs() {
   const wsParams = new URLSearchParams();
   if (unit !== "all") wsParams.set("unit", unit);
   if (level !== "all") wsParams.set("level", level);
-  useWebSocket(`/api/settings/logs/ws?${wsParams.toString()}`, onMessage);
+  useWebSocket(`/api/settings/logs-ws?${wsParams.toString()}`, onMessage);
 
   useEffect(() => {
     if (paused) return;

@@ -76,15 +76,57 @@ class CameraAdapter:
         with self._lock:
             return self._backend.list_config()
 
+    # Hard timeout for one shutter release + buffered readout. libgphoto2 is
+    # known to deadlock when PTP encounters bus weirdness — without this the
+    # scheduler silently freezes for the rest of the deployment.
+    CAPTURE_TIMEOUT_SEC = 45.0
+    PREVIEW_TIMEOUT_SEC = 5.0
+
     def capture(self, dest_dir: Path | None = None) -> Path:
+        target = dest_dir or self._default_capture_dir()
+        target.mkdir(parents=True, exist_ok=True)
+        return self._run_with_timeout(
+            lambda: self._capture_inner(target),
+            self.CAPTURE_TIMEOUT_SEC,
+            "capture",
+        )
+
+    def _capture_inner(self, target: Path) -> Path:
         with self._lock:
-            target = dest_dir or self._default_capture_dir()
-            target.mkdir(parents=True, exist_ok=True)
             return self._backend.capture(target)
 
     def capture_preview(self) -> bytes:
+        return self._run_with_timeout(
+            self._preview_inner, self.PREVIEW_TIMEOUT_SEC, "capture_preview"
+        )
+
+    def _preview_inner(self) -> bytes:
         with self._lock:
             return self._backend.capture_preview()
+
+    def _run_with_timeout(self, fn: Any, timeout: float, op: str) -> Any:
+        """Run `fn` in a worker thread; if it doesn't return within `timeout`,
+        forcibly close the backend handle and raise TimeoutError.
+
+        Python threads can't be killed cleanly, so on timeout we (a) call
+        `backend.close()` to release the libgphoto2 handle (some bodies
+        respond to this even from another thread), and (b) let the rogue
+        thread die in the background — the next request gets a fresh
+        Camera() because `close()` zeroes self._cam.
+        """
+        import concurrent.futures  # noqa: PLC0415
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(fn)
+            try:
+                return fut.result(timeout=timeout)
+            except concurrent.futures.TimeoutError as exc:
+                log.error("camera %s timed out after %.1fs — forcing reinit", op, timeout)
+                try:
+                    self._backend.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                raise TimeoutError(f"camera {op} exceeded {timeout}s") from exc
 
     def close(self) -> None:
         with self._lock:
