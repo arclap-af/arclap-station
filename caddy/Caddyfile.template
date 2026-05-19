@@ -81,9 +81,7 @@
 }
 
 arclap-st-${SERIAL}.local {
-	tls internal {
-		on_demand
-	}
+	tls internal
 	import arclap_common
 }
 
