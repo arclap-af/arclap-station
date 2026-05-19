@@ -108,22 +108,28 @@ export function SetupWizard() {
           await setup.station(state.stationName, state.timezone);
           break;
         case "dest":
+          // Setup wizard only TESTS the destination here; the user can
+          // create the real destination from the Destinations page later.
           await setup.destination({
-            kind: state.destType,
-            name: state.destName,
+            type: state.destType,
             config: state.destConfig,
           });
           break;
         case "schedule":
           await setup.schedule({
-            interval_minutes: state.schedInterval,
+            interval_min: state.schedInterval,
             from_time: state.schedFrom,
             to_time: state.schedTo,
             days: state.schedDays,
+            name: state.destName || "Default",
           });
           break;
         case "pair":
-          await setup.pair({ enabled: state.pair, code: state.pair ? state.pairCode : null });
+          // Only call /setup/pair when pairing is enabled — backend
+          // requires pair_code min_length=4.
+          if (state.pair && state.pairCode && state.pairCode.length >= 4) {
+            await setup.pair(state.pairCode);
+          }
           break;
         case "done":
           await setup.finish();

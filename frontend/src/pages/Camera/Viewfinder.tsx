@@ -27,7 +27,7 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
     }
   };
 
-  const { status } = useWebSocket("/api/v1/camera/liveview", onFrame, { binaryType: "blob" });
+  const { status } = useWebSocket("/api/camera/liveview", onFrame, { binaryType: "blob" });
 
   useEffect(
     () => () => {

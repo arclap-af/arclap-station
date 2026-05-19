@@ -9,7 +9,8 @@
 
 import { z } from "zod";
 
-export const API_PREFIX = "/api/v1";
+// Backend mounts routers at /api/<area> (no /v1 segment). Match it.
+export const API_PREFIX = "/api";
 
 export class ApiError extends Error {
   public readonly status: number;

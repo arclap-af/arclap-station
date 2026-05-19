@@ -20,7 +20,7 @@ export function Login() {
   }, []);
 
   useEffect(() => {
-    if (session?.authenticated) {
+    if (session?.logged_in) {
       navigate(next, { replace: true });
     }
   }, [session, navigate, next]);

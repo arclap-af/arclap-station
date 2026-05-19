@@ -48,13 +48,13 @@
 		flush_interval -1
 	}
 
-	# Backend API & MJPEG stream — pipe straight to the FastAPI socket.
+	# Backend API & MJPEG stream — pipe straight to the FastAPI service.
+	# Note: read_buffer / write_buffer are Caddy 2.7+ only; Ubuntu Resolute
+	# ships Caddy 2.6.2 which rejects them. dial_timeout is 2.6-safe.
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8080 {
 			flush_interval -1
 			transport http {
-				read_buffer 4096
-				write_buffer 4096
 				dial_timeout 5s
 			}
 		}

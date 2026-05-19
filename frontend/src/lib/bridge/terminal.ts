@@ -4,6 +4,6 @@ import { wsUrl } from "../ws";
 // Backend wraps a restricted PTY; the route is gated by the same PIN session.
 export const terminal = {
   url(): string {
-    return wsUrl("/api/v1/terminal/ws");
+    return wsUrl("/api/terminal/ws");
   },
 };

@@ -29,9 +29,21 @@ case "$1" in
       "$ARCLAP_HOME" "$ARCLAP_CONFDIR" "$ARCLAP_CONFDIR/destinations" \
       "$ARCLAP_LOGDIR" "$ARCLAP_PHOTODIR"
 
-    # 3. Install the wheel into a venv if not already there.
+    # 3. Install the wheel into a venv. Pick a python3.x that exists
+    # (Pi-OS Bookworm ships 3.11, Ubuntu Resolute ships 3.14, etc.).
+    ARCLAP_PY=""
+    for candidate in python3.13 python3.12 python3.11 python3; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        ARCLAP_PY="$candidate"
+        break
+      fi
+    done
+    if [ -z "$ARCLAP_PY" ]; then
+      echo "arclap-station postinst: no python3 found in PATH; aborting" >&2
+      exit 1
+    fi
     if [ ! -x "$ARCLAP_PREFIX/venv/bin/arclap-station" ]; then
-      python3.11 -m venv "$ARCLAP_PREFIX/venv"
+      "$ARCLAP_PY" -m venv "$ARCLAP_PREFIX/venv"
       "$ARCLAP_PREFIX/venv/bin/pip" install --quiet --upgrade pip
       whl=$(ls "$ARCLAP_PREFIX"/wheels/*.whl 2>/dev/null | head -n1)
       if [ -n "$whl" ]; then
@@ -50,27 +62,29 @@ case "$1" in
       sed "s|\${SERIAL}|$serial|g" /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile
     fi
 
-    # 5. Hostname (only on a fresh install).
-    if [ "$(hostnamectl --static 2>/dev/null)" = "raspberrypi" ] \
-       || [ "$(hostnamectl --static 2>/dev/null)" = "arclap-st" ]; then
-      hostnamectl set-hostname "arclap-st-$serial" || true
-      grep -q "arclap-st-$serial" /etc/hosts || \
-        printf "127.0.1.1\t%s\n" "arclap-st-$serial" >> /etc/hosts
-    fi
+    # 5. Hostname. Accept the common defaults across Pi-OS + Ubuntu
+    # (raspberrypi, arclap-st, ubuntu) so first-time installs always rename.
+    cur_host="$(hostnamectl --static 2>/dev/null || echo "")"
+    case "$cur_host" in
+      raspberrypi|arclap-st|ubuntu|"")
+        hostnamectl set-hostname "arclap-st-$serial" || true
+        grep -q "arclap-st-$serial" /etc/hosts || \
+          printf "127.0.1.1\t%s\n" "arclap-st-$serial" >> /etc/hosts
+        ;;
+    esac
 
-    # 6. Reload + enable.
+    # 6. Reload + enable. Socket / uploader units are NOT enabled — the
+    # CLI doesn't implement socket activation and the uploader runs
+    # in-process via FastAPI lifespan.
     udevadm control --reload-rules || true
     udevadm trigger --action=change || true
     systemctl daemon-reload
-    deb-systemd-helper enable arclap-station.socket >/dev/null 2>&1 || true
     deb-systemd-helper enable arclap-station.service >/dev/null 2>&1 || true
-    deb-systemd-helper enable arclap-uploader.service >/dev/null 2>&1 || true
     deb-systemd-helper enable arclap-watchdog.timer >/dev/null 2>&1 || true
 
     if [ -d /run/systemd/system ]; then
       systemctl restart caddy avahi-daemon 2>/dev/null || true
-      systemctl restart arclap-station.socket arclap-station.service \
-                        arclap-uploader.service arclap-watchdog.timer 2>/dev/null || true
+      systemctl restart arclap-station.service 2>/dev/null || true
     fi
     ;;
 

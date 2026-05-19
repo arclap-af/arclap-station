@@ -62,7 +62,7 @@ function RootGate() {
   if (setupLoading) return <LoadingScreen label="Reading station state…" />;
   if (status?.first_boot) return <Navigate to="/setup" replace />;
   if (sessionLoading) return <LoadingScreen label="Checking session…" />;
-  return <Navigate to={session?.authenticated ? "/home" : "/login"} replace />;
+  return <Navigate to={session?.logged_in ? "/home" : "/login"} replace />;
 }
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -73,12 +73,12 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     queryFn: auth.session,
   });
   useEffect(() => {
-    if (!isLoading && !session?.authenticated) {
+    if (!isLoading && !session?.logged_in) {
       navigate(`/login?next=${encodeURIComponent(location.pathname)}`, { replace: true });
     }
   }, [isLoading, session, navigate, location.pathname]);
   if (isLoading) return <LoadingScreen label="Checking session…" />;
-  if (!session?.authenticated) return null;
+  if (!session?.logged_in) return null;
   return <>{children}</>;
 }
 

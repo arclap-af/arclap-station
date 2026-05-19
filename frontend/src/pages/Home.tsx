@@ -30,7 +30,7 @@ export function Home() {
       // ignore non-JSON frames
     }
   }, []);
-  const { status: wsStatus } = useWebSocket("/api/v1/home/ws", onWsMessage);
+  const { status: wsStatus } = useWebSocket("/api/home/ws", onWsMessage);
   const t = live ?? telemetry;
 
   if (!t) {

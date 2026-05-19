@@ -568,9 +568,13 @@ install_systemd() {
 
   install -m 0644 "${src}/arclap-station.service"  /etc/systemd/system/arclap-station.service
   install -m 0644 "${src}/arclap-station.socket"   /etc/systemd/system/arclap-station.socket
-  install -m 0644 "${src}/arclap-uploader.service" /etc/systemd/system/arclap-uploader.service
   install -m 0644 "${src}/arclap-watchdog.service" /etc/systemd/system/arclap-watchdog.service
   install -m 0644 "${src}/arclap-watchdog.timer"   /etc/systemd/system/arclap-watchdog.timer
+  # arclap-uploader.service is deliberately NOT deployed — its
+  # ExecStart calls a non-existent `arclap-station uploader` subcommand.
+  # The uploader queue runs in-process via FastAPI lifespan, so the
+  # standalone unit is redundant. Defensively remove any stale copy.
+  rm -f /etc/systemd/system/arclap-uploader.service
 
   systemctl daemon-reload
   ok "systemd units installed"
@@ -642,11 +646,18 @@ enable_services() {
   # We don't bail on individual enable failures — we want the user to
   # see WHICH service failed, not just a generic "Job failed" from
   # systemctl. Errors are tallied and journalctl-printed at the end.
+  #
+  # NOTE: arclap-uploader.service is NOT enabled. The uploader queue
+  # runs inside the FastAPI process (see backend lifespan in main.py),
+  # so the standalone unit is redundant AND its ExecStart references a
+  # CLI subcommand that doesn't exist. Defensively disable it in case
+  # an earlier install left it enabled.
+  systemctl disable --now arclap-uploader.service 2>/dev/null || true
+
   local units=(
     caddy
     avahi-daemon
     arclap-station.service
-    arclap-uploader.service
     arclap-watchdog.timer
   )
   local failed=()
