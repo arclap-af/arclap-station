@@ -5,11 +5,9 @@
 # The browser will warn on first visit; clicking through pins the cert via HSTS.
 
 {
-	# Run as the caddy user that the apt package created.
+	# Disable automatic HTTP→HTTPS redirects — we wire :80 ourselves below.
 	auto_https disable_redirects
-	# Cache certs and keys under /var/lib/caddy (set by the apt package).
-	persist_config off
-	# Silence the admin API binding to localhost only.
+	# Bind the admin API to localhost only.
 	admin localhost:2019
 }
 
