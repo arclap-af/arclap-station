@@ -9,7 +9,10 @@ interface ViewfinderProps {
 export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [fps, setFps] = useState(0);
+  const [hist, setHist] = useState<number[] | null>(null);
   const counterRef = useRef({ count: 0, last: performance.now(), url: null as string | null });
+  // Throttle histogram recompute so we don't tax the Pi 5's browser CPU.
+  const lastHistRef = useRef(0);
 
   const onFrame = (ev: MessageEvent) => {
     if (!(ev.data instanceof Blob)) return;
@@ -24,6 +27,11 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
       setFps(Math.round((counterRef.current.count * 1000) / (now - counterRef.current.last)));
       counterRef.current.count = 0;
       counterRef.current.last = now;
+    }
+    // Recompute histogram from the live frame at ~2 Hz.
+    if (showHistogram && now - lastHistRef.current > 500) {
+      lastHistRef.current = now;
+      computeHistogram(ev.data).then((bins) => bins && setHist(bins));
     }
   };
 
@@ -109,17 +117,68 @@ export function Viewfinder({ grid, showHistogram }: ViewfinderProps) {
           {fps} fps
         </span>
       </div>
-      {showHistogram && (
-        <div style={{ position: "absolute", top: 12, right: 12, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.7)", width: 140, height: 60 }}>
+      {showHistogram && hist && (
+        <div
+          style={{
+            position: "absolute",
+            top: 12,
+            right: 12,
+            padding: 6,
+            borderRadius: 6,
+            background: "rgba(0,0,0,0.7)",
+            width: 140,
+            height: 60,
+          }}
+        >
           <svg width="100%" height="100%" viewBox="0 0 100 40" preserveAspectRatio="none">
-            {[3, 8, 16, 28, 35, 32, 24, 18, 12, 8, 5, 3, 2, 1].map((v, i, a) => {
+            {hist.map((v, i, a) => {
               const x = i * (100 / a.length);
               const w = 100 / a.length;
-              return <rect key={i} x={x} y={40 - v} width={w - 0.5} height={v} fill="rgba(255,255,255,0.7)" />;
+              const h = Math.max(0, Math.min(40, v));
+              return (
+                <rect
+                  key={i}
+                  x={x}
+                  y={40 - h}
+                  width={w - 0.3}
+                  height={h}
+                  fill="rgba(255,255,255,0.78)"
+                />
+              );
             })}
           </svg>
         </div>
       )}
     </div>
   );
+}
+
+// Compute a 32-bin luma histogram from the live preview JPEG. Returns
+// scaled bar heights (0-40 range to match the SVG viewBox). Best-effort:
+// returns null if decoding fails (older browsers, broken JPEG, etc.).
+async function computeHistogram(blob: Blob): Promise<number[] | null> {
+  try {
+    const bitmap = await createImageBitmap(blob);
+    // Downscale for cheap luma sampling — quality is irrelevant.
+    const W = 64;
+    const H = Math.max(1, Math.round((bitmap.height / bitmap.width) * W));
+    const canvas = new OffscreenCanvas(W, H);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, W, H);
+    const data = ctx.getImageData(0, 0, W, H).data;
+    const bins = new Array(32).fill(0);
+    for (let i = 0; i < data.length; i += 4) {
+      // Rec.601 luma — fine for exposure visualisation.
+      const y =
+        (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) | 0;
+      const b = Math.min(31, y >> 3);
+      bins[b]++;
+    }
+    const max = Math.max(1, ...bins);
+    // Scale to the SVG height (40 px).
+    return bins.map((b) => Math.round((b / max) * 40));
+  } catch {
+    return null;
+  }
 }

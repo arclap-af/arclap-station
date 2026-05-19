@@ -7,16 +7,23 @@ import { Pill } from "../../components/Pill";
 import { camera, type CameraSettings } from "../../lib/bridge/camera";
 import { Viewfinder } from "./Viewfinder";
 
-const ISOS = ["100", "200", "400", "800", "1600", "3200", "6400", "12800"];
-const SHUTTERS = ["1/4000", "1/2000", "1/1000", "1/500", "1/250", "1/125", "1/60", "1/30", "1/15", "1/8", '1"', '2"'];
-const APERTURES = ["f/2.8", "f/4", "f/5.6", "f/8", "f/11", "f/16", "f/22"];
-const MODES = ["P", "Av", "Tv", "M", "B", "Auto"];
-
 export function CameraPage() {
   const qc = useQueryClient();
   const [grid, setGrid] = useState<"thirds" | "center" | "none">("thirds");
   const [showHistogram, setShowHistogram] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Pull real choices from gphoto2 instead of hardcoded constants — what
+  // shows up below is what the actual camera supports.
+  const { data: info } = useQuery({
+    queryKey: ["camera.info"],
+    queryFn: camera.info,
+    refetchInterval: 30_000,
+  });
+  const MODES = info?.choices.mode ?? [];
+  const ISOS = info?.choices.iso ?? [];
+  const SHUTTERS = info?.choices.shutter ?? [];
+  const APERTURES = info?.choices.aperture ?? [];
 
   const { data: settings } = useQuery({
     queryKey: ["camera.settings"],

@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/home", tags=["home"])
 
 
 def _build_snapshot() -> dict[str, Any]:
+    from arclap_station import __version__ as _version  # noqa: PLC0415
+
     metrics = snapshot()
     info = get_adapter().detect()
     engine = get_engine()
@@ -37,8 +39,24 @@ def _build_snapshot() -> dict[str, Any]:
     destinations_warn = sum(1 for d in dests if d.last_error)
 
     next_fire = engine.next_fire_time()
+    # Resolve the host's primary LAN IP — used by the cockpit's URL bar.
+    import socket as _socket  # noqa: PLC0415
+
+    primary_ip = ""
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    try:
+        s.connect(("1.1.1.1", 1))
+        primary_ip = s.getsockname()[0]
+    except OSError:
+        pass
+    finally:
+        s.close()
+
     return {
         **metrics,
+        "version": _version,
+        "firmware": _version,
+        "ip": primary_ip,
         "camera": {
             "detected": info.detected,
             "model": info.model,
@@ -69,6 +87,21 @@ def _build_snapshot() -> dict[str, Any]:
 @router.get("")
 async def home_snapshot(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
     return _build_snapshot()
+
+
+@router.get("/activity")
+async def home_activity(
+    limit: int = 25,
+    _: dict[str, Any] = Depends(require_session),
+) -> list[dict[str, Any]]:
+    """Recent audit-log events for the dashboard's Activity panel.
+
+    Returns the last N rows from `audit_log`, oldest first within the
+    window so the UI can render them top-to-bottom as a feed.
+    """
+    from arclap_station.audit import recent as recent_audit  # noqa: PLC0415
+
+    return recent_audit(limit=max(1, min(200, int(limit))))
 
 
 @router.websocket("/ws")

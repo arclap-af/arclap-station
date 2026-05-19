@@ -90,7 +90,7 @@ function Shell() {
   });
   const hostname = telemetry?.hostname ?? "arclap-station";
   const ip = telemetry?.ip ?? "—";
-  const firmware = telemetry?.firmware ?? "0.1.0";
+  const firmware = telemetry?.firmware ?? "—";
   const status = telemetry?.status ?? "online";
   return (
     <>

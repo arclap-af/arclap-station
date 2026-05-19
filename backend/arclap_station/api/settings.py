@@ -264,7 +264,23 @@ async def security_info(_: dict[str, Any] = Depends(require_session)) -> dict[st
         "pty": pty_info(),
         "tls": _tls_info(),
         "ssh": _ssh_info(),
+        "pin_changed_days_ago": _pin_age_days(),
     }
+
+
+def _pin_age_days() -> int | None:
+    """Days since the PIN file was last modified. None if never set."""
+    import time as _time  # noqa: PLC0415
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    p = _P(get_settings().paths.etc) / "auth.json"
+    if not p.is_file():
+        return None
+    try:
+        age_s = _time.time() - p.stat().st_mtime
+        return int(age_s / 86400)
+    except OSError:
+        return None
 
 
 def _tls_info() -> dict[str, Any]:

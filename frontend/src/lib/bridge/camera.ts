@@ -87,7 +87,32 @@ const FLAT_TO_PATH: Record<keyof CameraSettings, string> = {
   aspect: "/main/imgsettings/aspectratio",
 };
 
+// Real camera state + actual gphoto2 choices for the chip rows.
+export interface CameraInfo {
+  detected: boolean;
+  model: string | null;
+  lens: string | null;
+  battery: string | null;
+  port: string | null;
+  shutter_count: number | null;
+  values: Partial<Record<keyof CameraSettings, string>>;
+  choices: Partial<Record<keyof CameraSettings, string[]>>;
+}
+
 export const camera = {
+  async info(): Promise<CameraInfo> {
+    const raw = await apiFetch<Record<string, any>>("/camera/info");
+    return {
+      detected: Boolean(raw?.detected),
+      model: raw?.model ?? null,
+      lens: raw?.lens ?? null,
+      battery: raw?.battery ?? null,
+      port: raw?.port ?? null,
+      shutter_count: typeof raw?.shutter_count === "number" ? raw.shutter_count : null,
+      values: (raw?.values ?? {}) as Partial<Record<keyof CameraSettings, string>>,
+      choices: (raw?.choices ?? {}) as Partial<Record<keyof CameraSettings, string[]>>,
+    };
+  },
   async settings(): Promise<CameraSettings> {
     const raw = await apiFetch<Record<string, any>>("/camera/settings");
     return adaptSettings(raw);

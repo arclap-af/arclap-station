@@ -74,8 +74,22 @@ async def capture(
         photo_path: Path = get_adapter().capture()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-    record = get_store().register(photo_path)
-    audit_emit("user", "camera.capture", {"photo_id": record.id, "path": str(photo_path)})
+
+    # Extract EXIF — ISO / shutter / aperture / dimensions — so the Gallery
+    # can show real settings per photo instead of "—".
+    exif, width, height = _extract_exif(photo_path)
+    record = get_store().register(photo_path, exif=exif, width=width, height=height)
+    audit_emit(
+        "user",
+        "camera.capture",
+        {
+            "photo_id": record.id,
+            "path": str(photo_path),
+            "iso": exif.get("iso") if exif else None,
+            "shutter": exif.get("shutter") if exif else None,
+            "aperture": exif.get("aperture") if exif else None,
+        },
+    )
     if enqueue:
         from arclap_station.scheduler.rules import list_destination_ids  # noqa: PLC0415
 
@@ -85,9 +99,160 @@ async def capture(
     return record.to_dict()
 
 
+def _extract_exif(path: Path) -> tuple[dict[str, Any], int | None, int | None]:
+    """Best-effort EXIF read using Pillow. Returns (exif_dict, w, h).
+
+    Failure modes (Pillow missing, file not an image, no EXIF tags) all
+    return {}, None, None. Never raises — capture itself already succeeded.
+    """
+    try:
+        from PIL import ExifTags, Image  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return {}, None, None
+    try:
+        with Image.open(str(path)) as img:
+            w, h = img.size
+            raw = getattr(img, "_getexif", lambda: None)() or {}
+    except Exception:  # noqa: BLE001
+        return {}, None, None
+    tags = {ExifTags.TAGS.get(k, str(k)): v for k, v in raw.items()}
+    out: dict[str, Any] = {}
+    # ISO can show up under either tag name.
+    iso = tags.get("ISOSpeedRatings") or tags.get("PhotographicSensitivity")
+    if iso is not None:
+        try:
+            out["iso"] = int(iso if not isinstance(iso, tuple | list) else iso[0])
+        except (TypeError, ValueError):
+            pass
+    # Shutter — ExposureTime is a Fraction-like (num, den).
+    exp = tags.get("ExposureTime")
+    if exp is not None:
+        try:
+            if isinstance(exp, tuple) and len(exp) == 2 and exp[1]:
+                out["shutter"] = f"{exp[0]}/{exp[1]}" if exp[0] < exp[1] else f"{exp[0] / exp[1]:.1f}"
+            elif hasattr(exp, "numerator"):
+                out["shutter"] = (
+                    f"{exp.numerator}/{exp.denominator}"
+                    if exp.numerator < exp.denominator
+                    else f"{float(exp):.1f}"
+                )
+            else:
+                v = float(exp)
+                out["shutter"] = f"1/{int(round(1 / v))}" if v < 1 else f"{v:.1f}"
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    # Aperture — FNumber is float-like.
+    fno = tags.get("FNumber") or tags.get("ApertureValue")
+    if fno is not None:
+        try:
+            if isinstance(fno, tuple) and len(fno) == 2 and fno[1]:
+                f = fno[0] / fno[1]
+            elif hasattr(fno, "numerator"):
+                f = float(fno)
+            else:
+                f = float(fno)
+            out["aperture"] = f"f/{f:.1f}"
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    # Camera identity (useful for the Gallery side panel).
+    if tags.get("Make"):
+        out["make"] = str(tags["Make"]).strip()
+    if tags.get("Model"):
+        out["model"] = str(tags["Model"]).strip()
+    if tags.get("LensModel"):
+        out["lens"] = str(tags["LensModel"]).strip()
+    if tags.get("DateTimeOriginal"):
+        out["taken_at"] = str(tags["DateTimeOriginal"]).strip()
+    return out, w, h
+
+
 @router.get("/properties")
 async def properties(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
     return get_adapter().list_config()
+
+
+@router.get("/info")
+async def camera_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    """Flat camera state + the ACTUAL choices the current body offers.
+
+    The cockpit's Camera page uses this to render the mode/ISO/shutter/
+    aperture chip rows — instead of guessing what the camera supports
+    from a hardcoded list, we ask gphoto2 what its real options are.
+    """
+    adapter = get_adapter()
+    try:
+        info = adapter.detect()
+    except Exception:  # noqa: BLE001
+        info = None
+    tree: dict[str, Any] = {}
+    try:
+        tree = adapter.list_config()
+    except Exception:  # noqa: BLE001
+        tree = {}
+
+    def widget(path: str) -> dict[str, Any]:
+        return tree.get(path, {}) if isinstance(tree, dict) else {}
+
+    def value_of(*paths: str, fallback: str = "—") -> str:
+        for p in paths:
+            w = widget(p)
+            v = w.get("value")
+            if v not in (None, ""):
+                return str(v)
+        return fallback
+
+    def choices_of(*paths: str) -> list[str]:
+        for p in paths:
+            w = widget(p)
+            ch = w.get("choices")
+            if isinstance(ch, list) and ch:
+                return [str(c) for c in ch]
+        return []
+
+    return {
+        "detected": bool(info and info.detected),
+        "model": info.model if info else None,
+        "lens": info.lens if info else None,
+        "battery": info.battery if info else None,
+        "port": info.port if info else None,
+        "shutter_count": info.shutter_count if info else None,
+        "values": {
+            "mode": value_of(
+                "/main/capturesettings/autoexposuremode",
+                "/main/capturesettings/shootmode",
+            ),
+            "iso": value_of("/main/imgsettings/iso"),
+            "shutter": value_of("/main/capturesettings/shutterspeed"),
+            "aperture": value_of("/main/capturesettings/aperture"),
+            "wb": value_of("/main/imgsettings/whitebalance"),
+            "drive": value_of("/main/capturesettings/drivemode"),
+            "quality": value_of(
+                "/main/imgsettings/imageformat",
+                "/main/imgsettings/imagequality",
+            ),
+            "focus": value_of("/main/capturesettings/focusmode"),
+            "metering": value_of("/main/capturesettings/meteringmode"),
+            "picture_style": value_of("/main/imgsettings/picturestyle"),
+        },
+        "choices": {
+            "mode": choices_of(
+                "/main/capturesettings/autoexposuremode",
+                "/main/capturesettings/shootmode",
+            ),
+            "iso": choices_of("/main/imgsettings/iso"),
+            "shutter": choices_of("/main/capturesettings/shutterspeed"),
+            "aperture": choices_of("/main/capturesettings/aperture"),
+            "wb": choices_of("/main/imgsettings/whitebalance"),
+            "drive": choices_of("/main/capturesettings/drivemode"),
+            "quality": choices_of(
+                "/main/imgsettings/imageformat",
+                "/main/imgsettings/imagequality",
+            ),
+            "focus": choices_of("/main/capturesettings/focusmode"),
+            "metering": choices_of("/main/capturesettings/meteringmode"),
+            "picture_style": choices_of("/main/imgsettings/picturestyle"),
+        },
+    }
 
 
 @router.websocket("/preview-ws")

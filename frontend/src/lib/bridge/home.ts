@@ -85,7 +85,12 @@ export function adaptTelemetry(raw: Record<string, unknown>): Telemetry {
     hostname: str(stationRaw, "hostname", "arclap-station"),
     ip: typeof raw["ip"] === "string" ? (raw["ip"] as string) : "—",
     serial: typeof raw["serial"] === "string" ? (raw["serial"] as string) : "",
-    firmware: typeof raw["firmware"] === "string" ? (raw["firmware"] as string) : "0.1.0",
+    firmware:
+      typeof raw["firmware"] === "string"
+        ? (raw["firmware"] as string)
+        : typeof raw["version"] === "string"
+          ? (raw["version"] as string)
+          : "—",
     uptime_seconds: num("uptime_seconds"),
     status: "online",
     last_sync_seconds_ago: num("last_sync_seconds_ago"),
@@ -134,9 +139,35 @@ export const home = {
     const raw = await apiFetch<Record<string, unknown>>("/home");
     return adaptTelemetry(raw);
   },
-  async activity(_limit = 10): Promise<ActivityEvent[]> {
-    // Backend doesn't expose /api/home/activity yet; return empty so
-    // the dashboard's activity panel just shows "—".
-    return [];
+  async activity(limit = 25): Promise<ActivityEvent[]> {
+    // Real audit log feed. Backend returns rows shaped like
+    // {ts, actor, event, details_json, ...}. Map into the UI's
+    // ActivityEvent shape.
+    try {
+      const raw = await apiFetch<Array<Record<string, any>>>(
+        `/home/activity?limit=${Math.max(1, Math.min(200, limit))}`,
+      );
+      if (!Array.isArray(raw)) return [];
+      return raw.map((e) => ({
+        ts: String(e.ts ?? e.timestamp ?? ""),
+        service: String(e.actor ?? e.service ?? "system"),
+        level: ((): "info" | "warn" | "error" => {
+          const ev = String(e.event ?? "");
+          if (ev.includes("error") || ev.includes("failed") || ev.includes("crash"))
+            return "error";
+          if (
+            ev.includes("warn") ||
+            ev.includes("watchdog") ||
+            ev.includes("locked_out") ||
+            ev.includes("invalid")
+          )
+            return "warn";
+          return "info";
+        })(),
+        message: String(e.event ?? e.message ?? ""),
+      }));
+    } catch {
+      return [];
+    }
   },
 };
