@@ -634,18 +634,51 @@ install_avahi() {
 enable_services() {
   step 12 "Enabling services"
 
-  systemctl enable --now caddy
-  systemctl enable --now avahi-daemon
-  systemctl enable --now arclap-station.socket
-  systemctl enable --now arclap-station.service
-  systemctl enable --now arclap-uploader.service
-  systemctl enable --now arclap-watchdog.timer
+  # Defensively disable arclap-station.socket if a previous (broken)
+  # install enabled it. The current architecture uses plain TCP, not
+  # systemd socket activation, so the .socket unit is a no-op.
+  systemctl disable --now arclap-station.socket 2>/dev/null || true
 
+  # We don't bail on individual enable failures — we want the user to
+  # see WHICH service failed, not just a generic "Job failed" from
+  # systemctl. Errors are tallied and journalctl-printed at the end.
+  local units=(
+    caddy
+    avahi-daemon
+    arclap-station.service
+    arclap-uploader.service
+    arclap-watchdog.timer
+  )
+  local failed=()
+  for u in "${units[@]}"; do
+    if systemctl enable --now "${u}"; then
+      ok "Enabled ${u}"
+    else
+      warn "systemctl enable --now ${u} returned non-zero"
+      failed+=("${u}")
+    fi
+  done
+
+  # Give the FastAPI service a moment to settle.
   sleep 5
+
+  # arclap-station.service is the one that matters most. If it's down,
+  # dump its logs and abort so the operator can diagnose.
   if ! systemctl is-active --quiet arclap-station.service; then
     warn "arclap-station.service is not active. Recent logs:"
-    journalctl -u arclap-station -n 30 --no-pager || true
-    die "Service failed to start. See logs above and consult docs/troubleshooting.md."
+    journalctl -u arclap-station -n 60 --no-pager || true
+    if [[ ${#failed[@]} -gt 0 ]]; then
+      warn "Other units that failed to enable: ${failed[*]}"
+      for u in "${failed[@]}"; do
+        printf "\n--- journalctl -u %s -n 30 ---\n" "${u}"
+        journalctl -u "${u}" -n 30 --no-pager || true
+      done
+    fi
+    die "arclap-station.service failed to start. See logs above and consult docs/troubleshooting.md."
+  fi
+
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    warn "Non-critical units that failed to enable: ${failed[*]} — install will continue."
   fi
   ok "All services active"
 }

@@ -1,12 +1,14 @@
 [Unit]
 Description=Arclap Station — FastAPI control plane
 Documentation=https://github.com/arclap-af/arclap-station
-After=network-online.target arclap-station.socket
+After=network-online.target
 Wants=network-online.target
-Requires=arclap-station.socket
 
 [Service]
-Type=notify
+# Plain TCP — uvicorn binds 127.0.0.1:8080, Caddy reverse-proxies to that.
+# Socket activation was planned but the CLI doesn't implement the
+# LISTEN_FDS protocol or sd_notify, so Type=simple is the honest choice.
+Type=simple
 User=arclap
 Group=arclap
 WorkingDirectory=/var/lib/arclap
@@ -16,21 +18,17 @@ Environment=ARCLAP_CONF_DIR=/etc/arclap
 Environment=ARCLAP_STATE_DIR=/var/lib/arclap
 Environment=ARCLAP_PHOTO_DIR=/media/sdcard/photos
 Environment=ARCLAP_LOG_DIR=/var/log/arclap
+Environment=ARCLAP_BIND_HOST=127.0.0.1
+Environment=ARCLAP_BIND_PORT=8080
 EnvironmentFile=-/etc/arclap/environment
 
-# systemd passes FD 3 as the listening socket. arclap-station's CLI reads it.
-ExecStart=/opt/arclap-station/venv/bin/arclap-station serve --socket-fd=3
+ExecStart=/opt/arclap-station/venv/bin/arclap-station serve
 ExecReload=/bin/kill -HUP $MAINPID
 
 Restart=always
 RestartSec=3
 TimeoutStartSec=60
 TimeoutStopSec=30
-
-# Hardware watchdog — the Pi 5 BCM2712 SoC has /dev/watchdog.
-# 60s grace; the app emits WATCHDOG=1 over $NOTIFY_SOCKET every 15s.
-RuntimeWatchdogSec=60s
-WatchdogSec=30s
 
 # Resource limits.
 LimitNOFILE=4096
@@ -59,7 +57,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
-# Bind a privileged port? No — we listen on a UDS, Caddy fronts 443.
+# We bind 127.0.0.1:8080 (unprivileged) — Caddy fronts 443.
 CapabilityBoundingSet=
 AmbientCapabilities=
 
@@ -74,4 +72,3 @@ SyslogIdentifier=arclap-station
 
 [Install]
 WantedBy=multi-user.target
-Also=arclap-station.socket
