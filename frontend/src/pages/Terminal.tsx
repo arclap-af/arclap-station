@@ -97,7 +97,7 @@ export function Terminal() {
   function sendCtrlC() {
     if (status !== "open") return;
     // 0x03 = ETX = Ctrl+C. PTY interprets it as SIGINT to the foreground process.
-    send(new Uint8Array([0x03]).buffer);
+    send(new Uint8Array([0x03]));
     setInput("");
   }
 
@@ -137,7 +137,7 @@ export function Terminal() {
       e.preventDefault();
       if (!input) {
         // 0x04 = EOT = Ctrl+D → close shell
-        send(new Uint8Array([0x04]).buffer);
+        send(new Uint8Array([0x04]));
       }
     }
   };
