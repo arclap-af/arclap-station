@@ -183,24 +183,44 @@ export const settings = {
   async system(): Promise<SystemInfo> {
     const raw = (await apiFetch<Record<string, any>>("/settings/system")) ?? {};
     const snap = raw.snapshot ?? {};
+    const wd = raw.watchdog ?? {};
+    const ups = raw.ups ?? {};
+    const cloud = raw.cloud ?? {};
+    const fw = raw.firmware ?? {};
+    const upsLabel = ups.detected
+      ? `${ups.driver}${ups.battery_pct != null ? ` · ${ups.battery_pct}%` : ""} · ${ups.status}`
+      : "not detected";
+    const watchdogLabel =
+      wd.summary === "active"
+        ? `active (kernel ${wd.kernel_runtime_sec}s · service + camera timers)`
+        : wd.summary === "partial"
+          ? "partial"
+          : "inactive";
     return {
       hardware: {
-        model: str(raw.hw_model, "Raspberry Pi 5"),
+        model: str(raw.hw_model, "—"),
         serial: str(raw.hw_serial, "—"),
         cpu_pct: num(snap.cpu_pct),
         cpu_temp_c: num(snap.cpu_temp_c),
-        memory_used_mb: Math.round((num(snap.mem_used_pct) / 100) * num(snap.mem_total_mb, 1)),
+        memory_used_mb:
+          typeof snap.mem_used_mb === "number"
+            ? snap.mem_used_mb
+            : Math.round((num(snap.mem_used_pct) / 100) * num(snap.mem_total_mb, 1)),
         memory_total_mb: num(snap.mem_total_mb, 1),
-        ups: "absent",
-        watchdog: "active",
+        ups: upsLabel,
+        watchdog: watchdogLabel,
       },
       firmware: {
-        current: str(raw.version, "0.2.x"),
-        channel: "stable",
-        last_check: "—",
-        available: "—",
+        current: str(fw.current, str(raw.version, "—")),
+        channel: str(fw.channel, "manual"),
+        last_check: fw.last_check ? str(fw.last_check, "—") : "—",
+        available: fw.available ? str(fw.available, "—") : "—",
       },
-      cloud: { paired: false, broker: null, cockpit_url: null },
+      cloud: {
+        paired: Boolean(cloud.paired),
+        broker: cloud.broker ?? null,
+        cockpit_url: cloud.cockpit_url ?? null,
+      },
     };
   },
   async logs(unit?: string, level?: string, query?: string): Promise<LogEntry[]> {

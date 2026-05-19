@@ -92,21 +92,38 @@ export function adaptTelemetry(raw: Record<string, unknown>): Telemetry {
           ? (raw["version"] as string)
           : "—",
     uptime_seconds: num("uptime_seconds"),
-    status: "online",
+    // status is now backend-derived (camera + queue + disk + uptime).
+    status: ((): Telemetry["status"] => {
+      const s = raw["status"];
+      if (s === "online" || s === "warn" || s === "offline") return s;
+      return "online";
+    })(),
     last_sync_seconds_ago: num("last_sync_seconds_ago"),
     captures_today: num("captures_24h"),
-    next_capture_seconds: typeof raw["next_capture_seconds"] === "number"
-      ? (raw["next_capture_seconds"] as number)
-      : null,
-    queue_pending: num("queue_depth"),
-    queue_failed: queue("failed"),
+    next_capture_seconds:
+      typeof raw["next_capture_seconds"] === "number"
+        ? (raw["next_capture_seconds"] as number)
+        : null,
+    // Prefer the dedicated top-level counters, fall back to nested queue_stats.
+    queue_pending: typeof raw["queue_pending"] === "number"
+      ? (raw["queue_pending"] as number)
+      : num("queue_depth"),
+    queue_failed: typeof raw["queue_failed"] === "number"
+      ? (raw["queue_failed"] as number)
+      : queue("failed"),
     avg_upload_seconds: queue("avg_upload_seconds"),
-    storage_used_pct: num("storage_used_pct"),
-    storage_free_bytes: num("storage_free_bytes"),
+    // storage_used_pct still maps to disk_used_pct; storage_free_bytes
+    // now comes from a real metric.
+    storage_used_pct: num("disk_used_pct", num("storage_used_pct")),
+    storage_free_bytes: num("disk_free_bytes", num("storage_free_bytes")),
     cpu_pct: num("cpu_pct"),
     cpu_temp_c: num("cpu_temp_c"),
-    memory_used_mb: num("memory_used_mb"),
-    memory_total_mb: num("memory_total_mb", 1),
+    // mem_used_mb is new in v0.4; previously we derived it from the pct.
+    memory_used_mb:
+      typeof raw["mem_used_mb"] === "number"
+        ? (raw["mem_used_mb"] as number)
+        : Math.round((num("mem_used_pct") / 100) * num("mem_total_mb", 1)),
+    memory_total_mb: num("mem_total_mb", num("memory_total_mb", 1)),
     network_throughput_mbps: num("network_throughput_mbps"),
     network_signal_dbm: typeof raw["network_signal_dbm"] === "number"
       ? (raw["network_signal_dbm"] as number)
