@@ -1,0 +1,21 @@
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, type RenderOptions } from "@testing-library/react";
+
+interface Options extends RenderOptions {
+  route?: string;
+}
+
+export function renderWithProviders(ui: ReactElement, opts: Options = {}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const initialEntries = opts.route ? [opts.route] : ["/"];
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+    opts,
+  );
+}

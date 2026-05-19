@@ -1,0 +1,51 @@
+# Arclap Station — udev rules for tethered DSLR access via libgphoto2.
+#
+# Strategy: install.sh also generates /etc/udev/rules.d/40-libgphoto2.rules
+# from libgphoto2's print-camera-list, which covers every PTP body the system
+# knows about. THIS file is defence-in-depth for major DSLR vendors and a
+# catch-all for new bodies that libgphoto2's official list misses.
+#
+# All matched devices are owned by group `plugdev` with 0660. The `arclap`
+# service user is a member of plugdev (see install.sh step 3).
+
+ACTION!="add|change", GOTO="arclap_end"
+SUBSYSTEM!="usb", GOTO="arclap_end"
+
+# ---- Vendor catch-alls ----
+# Canon (Cameras, includes EOS R/RP/5D/6D/Rebel).
+ATTR{idVendor}=="04a9", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Nikon (D/Z series).
+ATTR{idVendor}=="04b0", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Sony (Alpha series, also Sony Computer Entertainment USA so be specific).
+ATTR{idVendor}=="054c", ATTR{idProduct}=="0?*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Fujifilm.
+ATTR{idVendor}=="04cb", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Olympus / OM Digital Solutions.
+ATTR{idVendor}=="07b4", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Panasonic / Lumix.
+ATTR{idVendor}=="04da", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Pentax / Ricoh Imaging.
+ATTR{idVendor}=="25fb", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Leica.
+ATTR{idVendor}=="1a98", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# ---- Generic PTP class ----
+# Devices that advertise the PTP/MTP USB interface class (06/01/01 = Imaging/Still capture/PTP).
+ENV{ID_USB_INTERFACES}=="*:060101:*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# ---- Hand-off to libgphoto2's own rules ----
+# Drop a hint property so a downstream rule (40-libgphoto2.rules) can act if
+# it's present without re-matching the vendor list.
+ENV{ID_USB_INTERFACES}=="*:060101:*", ENV{ARCLAP_GPHOTO2}="1"
+
+# Stop udev from running fuse/gvfs auto-mount when our camera appears.
+ENV{ARCLAP_GPHOTO2}=="1", ENV{UDISKS_IGNORE}="1"
+
+LABEL="arclap_end"

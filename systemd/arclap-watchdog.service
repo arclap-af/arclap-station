@@ -1,0 +1,43 @@
+[Unit]
+Description=Arclap Station — health probe (poked by arclap-watchdog.timer)
+After=arclap-station.service
+PartOf=arclap-station.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+
+# Fires every 30s via the timer. On 3 consecutive failures (tracked in
+# /run/arclap-watchdog.fail) we restart the service. The probe goes via Caddy
+# so we exercise the full request path Caddy serves to LAN clients.
+ExecStart=/usr/bin/env bash -c '\
+  STATE=/run/arclap-watchdog.fail; \
+  if /usr/bin/timeout 5 /usr/bin/curl --silent --insecure --fail https://127.0.0.1/api/health >/dev/null; then \
+    rm -f "$STATE"; \
+    exit 0; \
+  fi; \
+  count=$(test -f "$STATE" && cat "$STATE" || echo 0); \
+  count=$((count + 1)); \
+  echo $count > "$STATE"; \
+  echo "watchdog probe failed (count=$count)"; \
+  if [ "$count" -ge 3 ]; then \
+    echo "watchdog: 3 consecutive failures — restarting arclap-station.service"; \
+    /bin/systemctl restart arclap-station.service; \
+    rm -f "$STATE"; \
+  fi'
+
+# Don't gate other units on this oneshot.
+TimeoutStartSec=10
+
+# ---- Hardening ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run
+RestrictNamespaces=true
+SyslogIdentifier=arclap-watchdog
+
+[Install]
+WantedBy=multi-user.target

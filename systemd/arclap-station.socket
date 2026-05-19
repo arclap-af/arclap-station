@@ -1,0 +1,17 @@
+[Unit]
+Description=Arclap Station socket (UDS for Caddy reverse proxy)
+PartOf=arclap-station.service
+Before=arclap-station.service
+
+[Socket]
+# Caddy reverse-proxies to this UNIX domain socket. Socket activation lets the
+# service restart for upgrades without dropping in-flight connections, because
+# systemd holds the FD across the swap.
+ListenStream=/run/arclap-station.sock
+SocketUser=arclap
+SocketGroup=arclap
+SocketMode=0660
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

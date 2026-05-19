@@ -1,0 +1,301 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import { Button } from "../components/Button";
+import { FormField, Select, TextInput } from "../components/FormField";
+import { Pill, StatusDot } from "../components/Pill";
+import { Toggle } from "../components/Toggle";
+import { Icon, I } from "../components/icons";
+import { schedule, type Schedule as ScheduleType, type ScheduleDraft } from "../lib/bridge/schedule";
+
+const DAY_LABELS: Array<[ScheduleType["days"][number], string]> = [
+  ["mon", "M"],
+  ["tue", "T"],
+  ["wed", "W"],
+  ["thu", "T"],
+  ["fri", "F"],
+  ["sat", "S"],
+  ["sun", "S"],
+];
+
+const INTERVALS = [5, 10, 15, 30, 60, 120];
+
+export function SchedulePage() {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<ScheduleDraft | null>(null);
+  const { data: items = [] } = useQuery({ queryKey: ["schedule"], queryFn: schedule.list });
+
+  const create = useMutation({
+    mutationFn: schedule.create,
+    onSuccess: () => {
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+  const update = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: ScheduleDraft }) => schedule.update(id, payload),
+    onSuccess: () => {
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: schedule.remove,
+    onSuccess: () => {
+      setDraft(null);
+      qc.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+  const setEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => schedule.setEnabled(id, enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["schedule"] }),
+  });
+
+  const openExisting = (s: ScheduleType) =>
+    setDraft({
+      id: s.id,
+      name: s.name,
+      interval_minutes: s.interval_minutes,
+      from_time: s.from_time,
+      to_time: s.to_time,
+      days: s.days,
+      enabled: s.enabled,
+      skip_disk_full: s.skip_disk_full,
+      skip_destinations_offline: s.skip_destinations_offline,
+      destination_id: s.destination_id,
+      destination_label: s.destination_label,
+    });
+
+  const openNew = () =>
+    setDraft({
+      name: "New schedule",
+      interval_minutes: 15,
+      from_time: "06:00",
+      to_time: "19:00",
+      days: ["mon", "tue", "wed", "thu", "fri"],
+      enabled: true,
+      skip_disk_full: true,
+      skip_destinations_offline: true,
+      destination_id: null,
+      destination_label: "All destinations",
+    });
+
+  const toggleDay = (day: ScheduleType["days"][number]) => {
+    if (!draft) return;
+    setDraft({ ...draft, days: draft.days.includes(day) ? draft.days.filter((d) => d !== day) : [...draft.days, day] });
+  };
+
+  const save = () => {
+    if (!draft) return;
+    if (draft.id) update.mutate({ id: draft.id, payload: draft });
+    else create.mutate(draft);
+  };
+
+  const capturesPerDay = (s: { interval_minutes: number; from_time: string; to_time: string }) => {
+    const [fh] = s.from_time.split(":").map(Number);
+    const [th] = s.to_time.split(":").map(Number);
+    const hours = ((th - fh + 24) % 24) || 24;
+    return Math.max(1, Math.floor((hours * 60) / s.interval_minutes));
+  };
+
+  return (
+    <div className="as-scroll">
+      <div className="as-page" style={{ maxWidth: 1100 }}>
+        <h1 className="as-h1">Schedule</h1>
+        <div className="as-h1-sub">
+          When this station captures automatically · {items.filter((x) => x.enabled).length} active
+        </div>
+        <div className="as-grid-2" style={{ alignItems: "start" }}>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 12, color: "var(--as-ink-3)", textTransform: "uppercase", letterSpacing: 0.06, fontWeight: 600 }}>
+                Configured · {items.length}
+              </div>
+              <Button variant="primary" onClick={openNew}>
+                <Icon d={I.plus} size={14} /> New schedule
+              </Button>
+            </div>
+            {items.map((s) => (
+              <div
+                key={s.id}
+                className="as-card"
+                style={{
+                  padding: 16,
+                  marginBottom: 10,
+                  border: draft?.id === s.id ? "1px solid var(--as-accent)" : "1px solid var(--as-line)",
+                  cursor: "pointer",
+                }}
+                onClick={() => openExisting(s)}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                      <Pill tone={s.enabled ? "ok" : "gray"}>
+                        <StatusDot tone={s.enabled ? "ok" : "off"} />
+                        {s.enabled ? "Active" : "Paused"}
+                      </Pill>
+                      <div style={{ fontSize: 14.5, fontWeight: 700 }}>{s.name}</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 14, fontSize: 12, color: "var(--as-ink-3)", flexWrap: "wrap" }}>
+                      <span>Every {s.interval_minutes} min</span>
+                      <span className="mono">{s.from_time} – {s.to_time}</span>
+                      <span>{s.days.length === 7 ? "All days" : `${s.days.length} days`}</span>
+                      <span>→ {s.destination_label}</span>
+                    </div>
+                  </div>
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    <Toggle on={s.enabled} onChange={(next) => setEnabled.mutate({ id: s.id, enabled: next })} />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {items.length === 0 && (
+              <div className="as-card" style={{ padding: 40, textAlign: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>No schedules</div>
+                <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Press “New schedule” to create one.</div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: "sticky", top: 0 }}>
+            {!draft ? (
+              <div className="as-card" style={{ padding: 40, textAlign: "center" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>Select a schedule</div>
+                <Button onClick={openNew}>+ New schedule</Button>
+              </div>
+            ) : (
+              <div className="as-card" style={{ padding: 0 }}>
+                <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--as-line)", display: "flex", justifyContent: "space-between" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{draft.id ? "Editing" : "New schedule"}</div>
+                  <button
+                    type="button"
+                    onClick={() => setDraft(null)}
+                    aria-label="Close"
+                    className="as-btn-icon"
+                    style={{ width: 32, height: 32 }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div style={{ padding: 20 }}>
+                  <FormField label="Name">
+                    <TextInput value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+                  </FormField>
+                  <FormField label="Interval">
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {INTERVALS.map((m) => {
+                        const active = draft.interval_minutes === m;
+                        return (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setDraft({ ...draft, interval_minutes: m })}
+                            style={{
+                              padding: "7px 14px",
+                              borderRadius: 8,
+                              border: `1px solid ${active ? "var(--as-accent)" : "var(--as-line)"}`,
+                              background: active ? "var(--as-accent)" : "var(--as-surface)",
+                              color: active ? "#04140e" : "var(--as-ink)",
+                              fontWeight: active ? 700 : 500,
+                              fontSize: 12.5,
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            {m < 60 ? `${m} min` : m === 60 ? "1 h" : `${m / 60} h`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </FormField>
+                  <FormField label="Active hours">
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      <TextInput type="time" value={draft.from_time} onChange={(e) => setDraft({ ...draft, from_time: e.target.value })} />
+                      <TextInput type="time" value={draft.to_time} onChange={(e) => setDraft({ ...draft, to_time: e.target.value })} />
+                    </div>
+                  </FormField>
+                  <FormField label="Days">
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {DAY_LABELS.map(([d, l]) => {
+                        const active = draft.days.includes(d);
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => toggleDay(d)}
+                            style={{
+                              flex: 1,
+                              height: 38,
+                              borderRadius: 8,
+                              border: `1px solid ${active ? "var(--as-accent)" : "var(--as-line)"}`,
+                              background: active ? "var(--as-accent-soft)" : "var(--as-surface)",
+                              color: active ? "var(--as-accent-2)" : "var(--as-ink-3)",
+                              fontWeight: 700,
+                              fontSize: 13,
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            {l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </FormField>
+                  <FormField label="Send to">
+                    <Select
+                      value={draft.destination_label}
+                      onChange={(e) =>
+                        setDraft({ ...draft, destination_label: e.target.value, destination_id: e.target.value === "All destinations" ? null : draft.destination_id })
+                      }
+                    >
+                      <option>All destinations</option>
+                      <option>S3 only</option>
+                      <option>Local only</option>
+                    </Select>
+                  </FormField>
+                  <div style={{ padding: "12px 14px", border: "1px solid var(--as-line)", borderRadius: 8, background: "var(--as-bg-2)", marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: "var(--as-ink-3)", textTransform: "uppercase", letterSpacing: 0.06, fontWeight: 600, marginBottom: 10 }}>
+                      Skip when
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+                      <div style={{ fontSize: 13 }}>Disk &gt; 90%</div>
+                      <Toggle on={draft.skip_disk_full} onChange={(v) => setDraft({ ...draft, skip_disk_full: v })} />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--as-line)" }}>
+                      <div style={{ fontSize: 13 }}>Destinations offline</div>
+                      <Toggle on={draft.skip_destinations_offline} onChange={(v) => setDraft({ ...draft, skip_destinations_offline: v })} />
+                    </div>
+                  </div>
+                  <div style={{ padding: "10px 14px", background: "var(--as-accent-soft)", borderRadius: 8, fontSize: 12, color: "var(--as-accent-2)" }}>
+                    ~<strong>{capturesPerDay(draft)}</strong> captures/day ·{" "}
+                    <strong>{capturesPerDay(draft) * draft.days.length}</strong>/week
+                  </div>
+                </div>
+                <div style={{ padding: 14, borderTop: "1px solid var(--as-line)", display: "flex", justifyContent: "space-between", background: "var(--as-bg-2)" }}>
+                  {draft.id ? (
+                    <Button style={{ color: "var(--as-bad)" }} onClick={() => remove.mutate(draft.id!)}>
+                      Delete
+                    </Button>
+                  ) : (
+                    <div />
+                  )}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Button onClick={() => setDraft(null)}>Cancel</Button>
+                    <Button variant="primary" onClick={save} disabled={create.isPending || update.isPending}>
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Arclap Station — fire the health probe every 30s
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=arclap-watchdog.service
+
+[Install]
+WantedBy=timers.target

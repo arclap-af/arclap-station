@@ -1,0 +1,58 @@
+[Unit]
+Description=Arclap Station — uploader worker (S3, SFTP, FTP, webhook, MQTT, local)
+After=network-online.target arclap-station.service
+Wants=network-online.target
+PartOf=arclap-station.service
+
+[Service]
+Type=simple
+User=arclap
+Group=arclap
+WorkingDirectory=/var/lib/arclap
+Environment=PYTHONUNBUFFERED=1
+Environment=ARCLAP_CONF_DIR=/etc/arclap
+Environment=ARCLAP_STATE_DIR=/var/lib/arclap
+Environment=ARCLAP_PHOTO_DIR=/media/sdcard/photos
+Environment=ARCLAP_LOG_DIR=/var/log/arclap
+EnvironmentFile=-/etc/arclap/environment
+
+ExecStart=/opt/arclap-station/venv/bin/arclap-station uploader
+
+Restart=always
+RestartSec=5
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+LimitNOFILE=4096
+TasksMax=128
+MemoryMax=256M
+
+# ---- Hardening ----
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+ReadWritePaths=/etc/arclap /var/lib/arclap /var/log/arclap /media/sdcard
+ReadOnlyPaths=/opt/arclap-station
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=arclap-uploader
+
+[Install]
+WantedBy=multi-user.target

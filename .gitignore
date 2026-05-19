@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+*.egg
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+venv/
+.venv/
+env/
+.env
+
+# Node / Vite
+node_modules/
+frontend/dist/
+.vite/
+.cache/
+*.tsbuildinfo
+.next/
+.nuxt/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local-only artefacts
+*.log
+*.db-journal
+*.db-wal
+*.db-shm
+scratch/
+.local/
+
+# Release build outputs (created by CI)
+*.whl
+*.deb
+*.tar.gz
+*.img.xz
+SHA256SUMS
+
+# Screenshots placeholder dir — filled by CI's Playwright job
+docs/screenshots/*.png
+docs/screenshots/*.jpg
+!docs/screenshots/.gitkeep

@@ -1,0 +1,81 @@
+#!/bin/sh
+# Arclap Station — .deb postinst hook.
+# Runs after dpkg has dropped the payload into place.
+
+set -e
+
+ARCLAP_USER=arclap
+ARCLAP_HOME=/var/lib/arclap
+ARCLAP_PREFIX=/opt/arclap-station
+ARCLAP_CONFDIR=/etc/arclap
+ARCLAP_LOGDIR=/var/log/arclap
+ARCLAP_PHOTODIR=/media/sdcard/photos
+
+case "$1" in
+  configure)
+    # 1. Create system user (idempotent).
+    if ! id "$ARCLAP_USER" >/dev/null 2>&1; then
+      adduser --system --quiet --group --home "$ARCLAP_HOME" --no-create-home \
+        --shell /usr/sbin/nologin "$ARCLAP_USER"
+    fi
+    for g in plugdev video dialout; do
+      if getent group "$g" >/dev/null 2>&1; then
+        usermod -a -G "$g" "$ARCLAP_USER" 2>/dev/null || true
+      fi
+    done
+
+    # 2. State dirs.
+    install -d -m 0750 -o "$ARCLAP_USER" -g "$ARCLAP_USER" \
+      "$ARCLAP_HOME" "$ARCLAP_CONFDIR" "$ARCLAP_CONFDIR/destinations" \
+      "$ARCLAP_LOGDIR" "$ARCLAP_PHOTODIR"
+
+    # 3. Install the wheel into a venv if not already there.
+    if [ ! -x "$ARCLAP_PREFIX/venv/bin/arclap-station" ]; then
+      python3.11 -m venv "$ARCLAP_PREFIX/venv"
+      "$ARCLAP_PREFIX/venv/bin/pip" install --quiet --upgrade pip
+      whl=$(ls "$ARCLAP_PREFIX"/wheels/*.whl 2>/dev/null | head -n1)
+      if [ -n "$whl" ]; then
+        "$ARCLAP_PREFIX/venv/bin/pip" install --quiet "$whl"
+      fi
+    fi
+    ln -sfn "$ARCLAP_PREFIX/venv/bin/arclap-station" /usr/local/bin/arclap-station
+
+    chown -R "$ARCLAP_USER:$ARCLAP_USER" "$ARCLAP_PREFIX"
+
+    # 4. Generate Caddyfile from template.
+    serial=$(awk -F: '/^Serial/ { gsub(/ /, "", $2); print tolower($2); exit }' /proc/cpuinfo 2>/dev/null \
+             | tail -c 9 | tr -d '\n')
+    if [ -z "$serial" ]; then serial="unknown1"; fi
+    if [ -f /etc/caddy/Caddyfile.template ]; then
+      sed "s|\${SERIAL}|$serial|g" /etc/caddy/Caddyfile.template > /etc/caddy/Caddyfile
+    fi
+
+    # 5. Hostname (only on a fresh install).
+    if [ "$(hostnamectl --static 2>/dev/null)" = "raspberrypi" ] \
+       || [ "$(hostnamectl --static 2>/dev/null)" = "arclap-st" ]; then
+      hostnamectl set-hostname "arclap-st-$serial" || true
+      grep -q "arclap-st-$serial" /etc/hosts || \
+        printf "127.0.1.1\t%s\n" "arclap-st-$serial" >> /etc/hosts
+    fi
+
+    # 6. Reload + enable.
+    udevadm control --reload-rules || true
+    udevadm trigger --action=change || true
+    systemctl daemon-reload
+    deb-systemd-helper enable arclap-station.socket >/dev/null 2>&1 || true
+    deb-systemd-helper enable arclap-station.service >/dev/null 2>&1 || true
+    deb-systemd-helper enable arclap-uploader.service >/dev/null 2>&1 || true
+    deb-systemd-helper enable arclap-watchdog.timer >/dev/null 2>&1 || true
+
+    if [ -d /run/systemd/system ]; then
+      systemctl restart caddy avahi-daemon 2>/dev/null || true
+      systemctl restart arclap-station.socket arclap-station.service \
+                        arclap-uploader.service arclap-watchdog.timer 2>/dev/null || true
+    fi
+    ;;
+
+  abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+esac
+
+exit 0

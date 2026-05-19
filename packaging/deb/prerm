@@ -1,0 +1,22 @@
+#!/bin/sh
+# Arclap Station — .deb prerm hook.
+# Stops services before files vanish.
+
+set -e
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop arclap-watchdog.timer 2>/dev/null || true
+      systemctl stop arclap-watchdog.service 2>/dev/null || true
+      systemctl stop arclap-uploader.service 2>/dev/null || true
+      systemctl stop arclap-station.service 2>/dev/null || true
+      systemctl stop arclap-station.socket 2>/dev/null || true
+    fi
+    ;;
+
+  failed-upgrade)
+    ;;
+esac
+
+exit 0

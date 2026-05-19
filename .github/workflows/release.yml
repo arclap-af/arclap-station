@@ -1,0 +1,326 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Leave blank to use the current ref."
+        required: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-backend:
+    name: Build backend wheel (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: x86_64
+          - platform: linux/arm64
+            arch: aarch64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build wheel under the matrix arch
+        run: |
+          mkdir -p dist
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --output type=local,dest=dist \
+            -f - . <<'DOCKER'
+          # syntax=docker/dockerfile:1.7
+          FROM python:3.11-bookworm AS build
+          ENV PIP_ROOT_USER_ACTION=ignore PIP_NO_CACHE_DIR=1
+          RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+                build-essential libgphoto2-dev pkg-config \
+              && rm -rf /var/lib/apt/lists/*
+          WORKDIR /src
+          COPY backend/ ./backend/
+          COPY LICENSE README.md ./
+          RUN python -m pip install --upgrade pip build
+          RUN cd backend && python -m build --wheel --outdir /out
+          FROM scratch AS export
+          COPY --from=build /out/*.whl /
+          DOCKER
+
+      - name: Rename wheel with arch tag
+        run: |
+          set -e
+          mkdir -p artifacts
+          for w in dist/*.whl; do
+            base=$(basename "$w" .whl)
+            cp "$w" "artifacts/${base}.${{ matrix.arch }}.whl"
+          done
+          ls -la artifacts
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.arch }}
+          path: artifacts/*.whl
+          retention-days: 14
+
+  build-frontend:
+    name: Build frontend bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Pack dist
+        run: |
+          mkdir -p artifacts
+          tar -C frontend/dist -czf artifacts/arclap-station-frontend.tar.gz .
+          ls -la artifacts
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: artifacts/arclap-station-frontend.tar.gz
+          retention-days: 14
+
+  build-deb:
+    name: Build .deb package
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download wheel (aarch64)
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-aarch64
+          path: ./build-deb/wheels
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend
+          path: ./build-deb/frontend
+
+      - name: Install fpm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ruby ruby-dev build-essential
+          sudo gem install --no-document fpm -v 1.15.1
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            v="${{ github.event.inputs.tag }}"
+          else
+            v="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage payload
+        run: |
+          set -e
+          stage=build-deb/pkg
+          mkdir -p \
+            "$stage/opt/arclap-station/wheels" \
+            "$stage/var/www/arclap" \
+            "$stage/etc/systemd/system" \
+            "$stage/etc/udev/rules.d" \
+            "$stage/etc/avahi/services" \
+            "$stage/etc/caddy" \
+            "$stage/usr/local/sbin"
+          cp build-deb/wheels/*.whl "$stage/opt/arclap-station/wheels/"
+          tar -xzf build-deb/frontend/arclap-station-frontend.tar.gz -C "$stage/var/www/arclap"
+          cp systemd/*.service systemd/*.socket systemd/*.timer "$stage/etc/systemd/system/"
+          cp udev/50-arclap-camera.rules "$stage/etc/udev/rules.d/"
+          cp avahi/arclap-station.service "$stage/etc/avahi/services/"
+          cp caddy/Caddyfile.template "$stage/etc/caddy/Caddyfile.template"
+          cp install.sh "$stage/usr/local/sbin/arclap-station-installer"
+          chmod +x "$stage/usr/local/sbin/arclap-station-installer"
+
+      - name: Build .deb
+        run: |
+          set -e
+          version="${{ steps.ver.outputs.version }}"
+          fpm \
+            -s dir -t deb \
+            -n arclap-station \
+            -v "${version}" \
+            -a arm64 \
+            --description "Arclap Station — DSLR control plane for Raspberry Pi 5" \
+            --url "https://github.com/arclap-af/arclap-station" \
+            --license "Apache-2.0" \
+            --maintainer "engineering@arclap.ch" \
+            --vendor "Arclap AG" \
+            --after-install packaging/deb/postinst \
+            --before-remove  packaging/deb/prerm \
+            --after-remove   packaging/deb/postrm \
+            --deb-recommends caddy \
+            --deb-recommends avahi-daemon \
+            --depends "python3.11" \
+            --depends "python3.11-venv" \
+            --depends "libgphoto2-6" \
+            --depends "gphoto2" \
+            --depends "ca-certificates" \
+            --depends "curl" \
+            --depends "jq" \
+            --chdir build-deb/pkg \
+            -p "arclap-station_${version}_arm64.deb" \
+            .
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: arclap-station_*_arm64.deb
+          retention-days: 14
+
+  build-pi-image:
+    name: Build Raspberry Pi OS image (pi-gen)
+    needs: [build-backend, build-frontend, build-deb]
+    runs-on: ubuntu-latest
+    # pi-gen takes ~45 min and needs a privileged loopback mount; we run it
+    # in CI only because nobody should attempt this on a laptop.
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: ./pi-image/deb
+
+      - name: Install pi-gen prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            coreutils quilt parted qemu-user-static debootstrap zerofree zip dosfstools \
+            libcap2-bin grep rsync xz-utils file git curl bc xxd kpartx libarchive-tools
+
+      - name: Clone pi-gen
+        run: git clone --depth 1 --branch arm64 https://github.com/RPi-Distro/pi-gen.git
+
+      - name: Drop arclap pi-gen stage
+        run: |
+          set -e
+          dst=pi-gen/stage-arclap
+          mkdir -p "$dst/00-install-deb/files"
+          cp pi-image/deb/*.deb "$dst/00-install-deb/files/arclap-station.deb"
+          cat > "$dst/prerun.sh" <<'PRE'
+          #!/bin/bash -e
+          if [ ! -d "${ROOTFS_DIR}" ]; then
+            copy_previous
+          fi
+          PRE
+          chmod +x "$dst/prerun.sh"
+          cat > "$dst/00-install-deb/01-run.sh" <<'RUN'
+          #!/bin/bash -e
+          install -d "${ROOTFS_DIR}/tmp/arclap"
+          install -m 0644 files/arclap-station.deb "${ROOTFS_DIR}/tmp/arclap/arclap-station.deb"
+          on_chroot << EOF
+          apt-get update -qq
+          apt-get install -y --no-install-recommends /tmp/arclap/arclap-station.deb
+          systemctl enable arclap-station.socket arclap-station.service arclap-uploader.service \
+            arclap-watchdog.timer caddy avahi-daemon
+          rm -rf /tmp/arclap
+          EOF
+          RUN
+          chmod +x "$dst/00-install-deb/01-run.sh"
+          touch "$dst/EXPORT_IMAGE"
+
+      - name: Configure pi-gen
+        run: |
+          set -e
+          version="${GITHUB_REF_NAME#v}"
+          : "${version:=0.0.0-dev}"
+          cat > pi-gen/config <<CFG
+          IMG_NAME="arclap-station-${version}"
+          RELEASE=bookworm
+          TARGET_HOSTNAME=arclap-st
+          ENABLE_SSH=1
+          STAGE_LIST="stage0 stage1 stage2 stage-arclap"
+          DEPLOY_COMPRESSION=xz
+          COMPRESSION_LEVEL=6
+          CFG
+
+      - name: Build the image
+        working-directory: pi-gen
+        run: sudo ./build.sh
+
+      - name: Collect output
+        run: |
+          mkdir -p pi-out
+          cp pi-gen/deploy/*.img.xz pi-out/ 2>/dev/null || true
+          cp pi-gen/deploy/*.zip pi-out/ 2>/dev/null || true
+          ls -la pi-out
+
+      - name: Upload Pi image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-image
+          path: pi-out/*
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-backend, build-frontend, build-deb, build-pi-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-bundle
+
+      - name: Flatten artifact tree
+        run: |
+          set -e
+          mkdir -p flat
+          find release-bundle -type f \( -name '*.whl' -o -name '*.tar.gz' -o -name '*.deb' -o -name '*.img.xz' -o -name '*.zip' \) -exec cp -v {} flat/ \;
+          ls -la flat
+          (cd flat && sha256sum * > SHA256SUMS)
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            flat/*

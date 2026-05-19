@@ -1,0 +1,36 @@
+<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+
+<!--
+  Arclap Station mDNS advertisement.
+
+  Advertises two records:
+
+    1. _arclap._tcp — our private service type. Lets the Installer App and
+       the Admin Cockpit discover stations on the LAN with one MDNS browse.
+    2. _https._tcp — standard HTTPS announcement so generic clients (Bonjour
+       in Finder, the Mosquitto-style mDNS browser on Android) can also find
+       the station.
+
+  The hostname is "arclap-st-<short-serial>" which install.sh sets via
+  hostnamectl, and `replace-wildcards="yes"` substitutes %h to that name.
+-->
+
+<service-group>
+  <name replace-wildcards="yes">Arclap Station %h</name>
+
+  <service>
+    <type>_arclap._tcp</type>
+    <port>443</port>
+    <txt-record>path=/</txt-record>
+    <txt-record>protocol=https</txt-record>
+    <txt-record>role=station</txt-record>
+    <txt-record>api=/api</txt-record>
+  </service>
+
+  <service>
+    <type>_https._tcp</type>
+    <port>443</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>

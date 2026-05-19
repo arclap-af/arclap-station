@@ -1,0 +1,100 @@
+# Arclap Station — Caddy reverse proxy.
+#
+# ${SERIAL} is substituted at install time by install.sh.
+# Caddy generates and rotates a self-signed certificate via `tls internal`.
+# The browser will warn on first visit; clicking through pins the cert via HSTS.
+
+{
+	# Run as the caddy user that the apt package created.
+	auto_https disable_redirects
+	# Cache certs and keys under /var/lib/caddy (set by the apt package).
+	persist_config off
+	# Silence the admin API binding to localhost only.
+	admin localhost:2019
+}
+
+(arclap_common) {
+	encode gzip zstd
+	header {
+		# HSTS — re-pinned every hit. Once the user has accepted the cert,
+		# the browser pins this hostname to HTTPS for a year.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Cockpit-style headers.
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		# A modest CSP — the SPA uses inline styles in dev so we allow 'unsafe-inline'
+		# for style-src only; scripts are bundled and not eval'd.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+		# Permissions-Policy — disable everything the cockpit doesn't need.
+		Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=()"
+		# Remove the X-Powered-By advert.
+		-Server
+	}
+
+	# Static assets bundled by Vite.
+	handle_path /assets/* {
+		root * /var/www/arclap/assets
+		file_server {
+			precompressed gzip br
+		}
+		header Cache-Control "public, max-age=31536000, immutable"
+	}
+
+	# WebSocket endpoints — explicit upgrade headers for clarity.
+	@websockets {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	reverse_proxy @websockets unix//run/arclap-station.sock {
+		flush_interval -1
+	}
+
+	# Backend API & MJPEG stream — pipe straight to the FastAPI socket.
+	handle /api/* {
+		reverse_proxy unix//run/arclap-station.sock {
+			flush_interval -1
+			transport http {
+				read_buffer 4096
+				write_buffer 4096
+				dial_timeout 5s
+			}
+		}
+	}
+	handle /ws/* {
+		reverse_proxy unix//run/arclap-station.sock {
+			flush_interval -1
+		}
+	}
+	handle /viewfinder.mjpg {
+		reverse_proxy unix//run/arclap-station.sock {
+			flush_interval -1
+		}
+	}
+
+	# SPA fallback — serve index.html for any unknown path so client routes work.
+	handle {
+		root * /var/www/arclap
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+arclap-st-${SERIAL}.local {
+	tls internal {
+		on_demand
+	}
+	import arclap_common
+}
+
+# Wildcard so iPad/iPhone visits to the bare IP also resolve (Bonjour gives them
+# the IP, not the .local). Caddy matches by SNI fallback.
+:443 {
+	tls internal
+	import arclap_common
+}
+
+# Plain-HTTP redirect for habit-clickers — sends them to HTTPS on the same host.
+:80 {
+	redir https://{host}{uri} permanent
+}

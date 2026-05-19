@@ -1,0 +1,49 @@
+#!/bin/sh
+# Arclap Station — .deb postrm hook.
+# Cleans up units after the payload is gone. Preserves state by default;
+# `apt purge arclap-station` deletes captured photos and the keyring.
+
+set -e
+
+ARCLAP_USER=arclap
+ARCLAP_HOME=/var/lib/arclap
+ARCLAP_PHOTODIR=/media/sdcard/photos
+ARCLAP_LOGDIR=/var/log/arclap
+ARCLAP_CONFDIR=/etc/arclap
+
+case "$1" in
+  remove)
+    if [ -d /run/systemd/system ]; then
+      systemctl daemon-reload || true
+    fi
+    udevadm control --reload-rules 2>/dev/null || true
+    rm -f /usr/local/bin/arclap-station
+    ;;
+
+  purge)
+    deb-systemd-helper purge arclap-station.socket   >/dev/null 2>&1 || true
+    deb-systemd-helper purge arclap-station.service  >/dev/null 2>&1 || true
+    deb-systemd-helper purge arclap-uploader.service >/dev/null 2>&1 || true
+    deb-systemd-helper purge arclap-watchdog.timer   >/dev/null 2>&1 || true
+
+    rm -rf /opt/arclap-station "$ARCLAP_LOGDIR" "$ARCLAP_CONFDIR"
+
+    # Refuse to delete photos silently — point operators to a manual rm.
+    if [ -d "$ARCLAP_PHOTODIR" ] && [ -n "$(find "$ARCLAP_PHOTODIR" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+      echo "arclap-station: $ARCLAP_PHOTODIR contains captures; not deleted." >&2
+      echo "arclap-station: remove manually with: sudo rm -rf $ARCLAP_PHOTODIR" >&2
+    else
+      rm -rf "$ARCLAP_PHOTODIR"
+    fi
+    rm -rf "$ARCLAP_HOME"
+
+    if getent passwd "$ARCLAP_USER" >/dev/null 2>&1; then
+      deluser --quiet --system "$ARCLAP_USER" 2>/dev/null || true
+    fi
+    ;;
+
+  upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+esac
+
+exit 0
