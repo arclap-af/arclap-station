@@ -91,53 +91,93 @@ export const settings = {
   },
   async network(): Promise<NetworkInfo> {
     const raw = (await apiFetch<Record<string, any>>("/settings/network")) ?? {};
-    const ip = str(raw.ip, "");
+    const eth = (raw.ethernet ?? {}) as Record<string, any>;
+    const wifi = (raw.wifi ?? {}) as Record<string, any>;
+    const cell = (raw.cellular ?? {}) as Record<string, any>;
+    const probes = Array.isArray(raw.probes) ? raw.probes : [];
     return {
       ethernet: {
-        connected: !!ip && ip !== "127.0.1.1",
-        interface: "eth0",
-        mode: "DHCP",
-        ipv4: ip || "—",
-        gateway: "—",
-        dns: "—",
-        mac: "—",
+        connected: Boolean(eth.connected),
+        interface: str(eth.interface, "eth0"),
+        mode: str(eth.mode, "DHCP"),
+        ipv4: str(eth.ipv4, "—"),
+        gateway: str(eth.gateway, "—"),
+        dns: str(eth.dns, "—"),
+        mac: str(eth.mac, "—"),
       },
-      wifi: { connected: false, ssid: "—", security: "—", band: "—", signal_dbm: null },
-      cellular: { status: "absent", modem: "—", carrier: "—", signal_dbm: null, apn: "—", data_mb: 0 },
-      probes: [
-        { label: "Hostname", result: str(raw.hostname, "—"), level: "ok" },
-        { label: "Platform", result: str(raw.platform, "—"), level: "ok" },
-      ],
+      wifi: {
+        connected: Boolean(wifi.connected),
+        ssid: str(wifi.ssid, "—"),
+        security: str(wifi.security, "—"),
+        band: str(wifi.band, "—"),
+        signal_dbm: typeof wifi.signal_dbm === "number" ? wifi.signal_dbm : null,
+      },
+      cellular: {
+        status: (str(cell.status, "absent") as NetworkInfo["cellular"]["status"]),
+        modem: str(cell.modem, "—"),
+        carrier: str(cell.carrier, "—"),
+        signal_dbm: typeof cell.signal_dbm === "number" ? cell.signal_dbm : null,
+        apn: str(cell.apn, "—"),
+        data_mb: num(cell.data_mb),
+      },
+      probes: probes.map((p: any) => ({
+        label: str(p.label, ""),
+        result: str(p.result, ""),
+        level: (str(p.level, "ok") as "ok" | "warn" | "bad"),
+      })),
     };
   },
   async security(): Promise<SecurityInfo> {
     const raw = (await apiFetch<Record<string, any>>("/settings/security")) ?? {};
+    const tls = (raw.tls ?? {}) as Record<string, any>;
+    const ssh = (raw.ssh ?? {}) as Record<string, any>;
     return {
       pin_changed_days_ago: 0,
       auto_lock_minutes: 15,
-      tls: { type: "Caddy self-signed", fingerprint: "—", expires: "—", hsts: true },
-      ssh: { enabled: true, port: 22, key_count: 0, last_login: null },
+      tls: {
+        type: str(tls.type, "Caddy self-signed (internal CA)"),
+        fingerprint: str(tls.fingerprint, "—"),
+        expires: str(tls.expires, "—"),
+        hsts: tls.hsts ?? true,
+      },
+      ssh: {
+        enabled: Boolean(ssh.enabled),
+        port: num(ssh.port, 22),
+        key_count: num(ssh.key_count, 0),
+        last_login: ssh.last_login ? str(ssh.last_login, null as any) : null,
+      },
       tokens: [
         ...(raw?.audit_chain?.ok
           ? [{ name: `Audit chain (${raw.audit_chain.checked} entries)`, prefix: "ok" }]
-          : []),
+          : raw?.audit_chain
+            ? [
+                {
+                  name: `Audit chain (${raw.audit_chain.checked} entries, ${
+                    raw.audit_chain.breaks?.length ?? 0
+                  } breaks)`,
+                  prefix: "WARN",
+                },
+              ]
+            : []),
       ],
     };
   },
   async storage(): Promise<StorageInfo> {
     const raw = (await apiFetch<Record<string, any>>("/settings/storage")) ?? {};
     const usedPct = num(raw.disk_used_pct, 0);
-    const cap = 64 * 1024 * 1024 * 1024; // 64 GB default if unknown
+    // Use real capacity from backend; fall back to a derived value if missing.
+    const cap = num(raw.capacity_bytes, 0) || 64 * 1024 * 1024 * 1024;
+    const used = num(raw.used_bytes, 0) || Math.round((usedPct / 100) * cap);
     return {
       device: str(raw.photos_root, "/media/sdcard"),
-      fs: "ext4",
+      fs: str(raw.fs, "ext4"),
       capacity_bytes: cap,
-      used_bytes: Math.round((usedPct / 100) * cap),
+      used_bytes: used,
       smart: "ok",
       buffer_path: str(raw.thumb_root, "/var/lib/arclap/thumbnails"),
       buffer_max: "1 GB",
-      retention: "90 days",
-      when_full: "Delete oldest unstarred",
+      retention: "4-tier (hot 7d / warm 30d / cold 90d / archive)",
+      when_full: "Auto-purge oldest uploaded",
     };
   },
   async system(): Promise<SystemInfo> {
@@ -145,8 +185,8 @@ export const settings = {
     const snap = raw.snapshot ?? {};
     return {
       hardware: {
-        model: "Raspberry Pi 5",
-        serial: "—",
+        model: str(raw.hw_model, "Raspberry Pi 5"),
+        serial: str(raw.hw_serial, "—"),
         cpu_pct: num(snap.cpu_pct),
         cpu_temp_c: num(snap.cpu_temp_c),
         memory_used_mb: Math.round((num(snap.mem_used_pct) / 100) * num(snap.mem_total_mb, 1)),
@@ -155,7 +195,7 @@ export const settings = {
         watchdog: "active",
       },
       firmware: {
-        current: str(raw.version, "0.1.0"),
+        current: str(raw.version, "0.2.x"),
         channel: "stable",
         last_check: "—",
         available: "—",

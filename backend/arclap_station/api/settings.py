@@ -50,17 +50,210 @@ async def update_general(
 
 @router.get("/network")
 async def network_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    """Real interface state from psutil + sysfs (Pi 5 specific).
+
+    Returns a structured payload covering ethernet, wifi (if present),
+    cellular (if present), and a list of connectivity probes.
+    """
+    import psutil  # noqa: PLC0415
+
     hostname = socket.gethostname()
-    try:
-        ip = socket.gethostbyname(hostname)
-    except OSError:
-        ip = ""
+    addrs = psutil.net_if_addrs()
+    stats = psutil.net_if_stats()
+
+    def _iface(name: str) -> dict[str, Any]:
+        if name not in addrs:
+            return {"connected": False, "interface": name}
+        ipv4 = ""
+        mac = ""
+        for a in addrs[name]:
+            if a.family.name == "AF_INET":
+                ipv4 = a.address
+            elif a.family.name == "AF_PACKET":
+                mac = a.address
+        is_up = bool(stats.get(name) and stats[name].isup)
+        return {
+            "connected": is_up and bool(ipv4),
+            "interface": name,
+            "mode": "DHCP",  # NetworkManager state would refine this
+            "ipv4": ipv4 or "—",
+            "gateway": _default_gateway() or "—",
+            "dns": _primary_dns() or "—",
+            "mac": mac or "—",
+        }
+
+    # Pick the first wired interface that looks like eth* / enp* / en* — Pi 5
+    # is usually 'eth0' on Ubuntu, but the predictable-name code path can
+    # produce different names.
+    eth_name = next(
+        (n for n in addrs if n.startswith(("eth", "enp", "en"))), "eth0"
+    )
+    wifi_name = next(
+        (n for n in addrs if n.startswith(("wlan", "wlp", "wlx"))), "wlan0"
+    )
+    eth = _iface(eth_name)
+    wifi = _iface(wifi_name) if wifi_name in addrs else {"connected": False, "interface": "wlan0"}
+
+    # SSID + signal (best-effort via `iw dev`).
+    ssid, signal_dbm, band = "—", None, "—"
+    if wifi.get("connected"):
+        ssid, signal_dbm, band = _wifi_details(wifi["interface"])
+
     return {
         "hostname": hostname,
-        "ip": ip,
+        "ip": eth.get("ipv4") or _local_ip(),
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "ethernet": eth,
+        "wifi": {
+            "connected": wifi.get("connected", False),
+            "ssid": ssid,
+            "security": "—",
+            "band": band,
+            "signal_dbm": signal_dbm,
+            "interface": wifi.get("interface", "wlan0"),
+        },
+        "cellular": {
+            "status": "absent",
+            "modem": "—",
+            "carrier": "—",
+            "signal_dbm": None,
+            "apn": "—",
+            "data_mb": 0,
+        },
+        "probes": _connectivity_probes(),
     }
+
+
+def _local_ip() -> str:
+    """Return the LAN IP by opening a UDP socket to a public address.
+
+    We never actually send anything; the OS picks the routing-source IP
+    for us. Works without network because we don't connect.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("1.1.1.1", 1))
+        return s.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
+
+def _default_gateway() -> str:
+    try:
+        with open("/proc/net/route") as f:
+            next(f)  # header
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3 and fields[1] == "00000000":
+                    return ".".join(str(int(fields[2][i : i + 2], 16)) for i in (6, 4, 2, 0))
+    except OSError:
+        pass
+    return ""
+
+
+def _primary_dns() -> str:
+    try:
+        with open("/etc/resolv.conf") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("nameserver"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return parts[1]
+    except OSError:
+        pass
+    return ""
+
+
+def _wifi_details(iface: str) -> tuple[str, int | None, str]:
+    """SSID + signal dBm + band, via `iw dev <iface> link`."""
+    import subprocess  # noqa: PLC0415
+
+    try:
+        out = subprocess.run(
+            ["iw", "dev", iface, "link"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return "—", None, "—"
+    if out.returncode != 0:
+        return "—", None, "—"
+    ssid = "—"
+    signal: int | None = None
+    band = "—"
+    for line in out.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("SSID:"):
+            ssid = line.split(":", 1)[1].strip() or "—"
+        elif line.startswith("signal:"):
+            try:
+                signal = int(line.split()[1])
+            except (ValueError, IndexError):
+                pass
+        elif line.startswith("freq:"):
+            try:
+                freq = int(line.split()[1])
+                band = "2.4 GHz" if freq < 3000 else "5 GHz" if freq < 6000 else "6 GHz"
+            except (ValueError, IndexError):
+                pass
+    return ssid, signal, band
+
+
+def _connectivity_probes() -> list[dict[str, str]]:
+    """Quick reachability checks for the cockpit's Network tab."""
+    import subprocess  # noqa: PLC0415
+
+    results: list[dict[str, str]] = []
+
+    def add(label: str, ok: bool, detail: str = "") -> None:
+        results.append({"label": label, "result": detail or ("ok" if ok else "down"), "level": "ok" if ok else "bad"})
+
+    # Default gateway reachable?
+    gw = _default_gateway()
+    if gw:
+        try:
+            r = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", gw],
+                capture_output=True,
+                timeout=3,
+            )
+            add(f"Gateway {gw}", r.returncode == 0)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            add(f"Gateway {gw}", False, "ping not available")
+    # Internet
+    try:
+        r = subprocess.run(
+            ["ping", "-c", "1", "-W", "2", "1.1.1.1"],
+            capture_output=True,
+            timeout=4,
+        )
+        add("Internet (1.1.1.1)", r.returncode == 0)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        add("Internet (1.1.1.1)", False, "ping not available")
+    # DNS
+    try:
+        socket.gethostbyname("cloudflare.com")
+        add("DNS resolve", True)
+    except OSError as exc:
+        add("DNS resolve", False, str(exc)[:40])
+    # NTP synced?
+    try:
+        r = subprocess.run(
+            ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        synced = r.stdout.strip() == "yes"
+        add("NTP synced", synced, "yes" if synced else "no")
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+    return results
 
 
 @router.get("/security")
@@ -69,28 +262,191 @@ async def security_info(_: dict[str, Any] = Depends(require_session)) -> dict[st
     return {
         "audit_chain": chain,
         "pty": pty_info(),
+        "tls": _tls_info(),
+        "ssh": _ssh_info(),
+    }
+
+
+def _tls_info() -> dict[str, Any]:
+    """Inspect Caddy's local CA cert if present."""
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    # Caddy local-CA cert lives under one of these paths depending on Caddy version.
+    candidates = list(_P("/var/lib/caddy/.local/share/caddy/certificates").rglob("*.crt")) if _P(
+        "/var/lib/caddy/.local/share/caddy/certificates"
+    ).exists() else []
+    fingerprint = "—"
+    expires = "—"
+    if candidates:
+        try:
+            import subprocess  # noqa: PLC0415
+
+            cert = str(candidates[0])
+            fp_out = subprocess.run(
+                ["openssl", "x509", "-in", cert, "-noout", "-fingerprint", "-sha256"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if fp_out.returncode == 0 and "=" in fp_out.stdout:
+                fingerprint = fp_out.stdout.split("=", 1)[1].strip()
+            exp_out = subprocess.run(
+                ["openssl", "x509", "-in", cert, "-noout", "-enddate"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if exp_out.returncode == 0 and "=" in exp_out.stdout:
+                expires = exp_out.stdout.split("=", 1)[1].strip()
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+    return {
+        "type": "Caddy self-signed (internal CA)",
+        "fingerprint": fingerprint,
+        "expires": expires,
+        "hsts": True,
+    }
+
+
+def _ssh_info() -> dict[str, Any]:
+    """SSH state: enabled?, key count, last login."""
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    enabled = False
+    try:
+        r = subprocess.run(
+            ["systemctl", "is-active", "ssh"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        enabled = r.stdout.strip() == "active"
+    except (FileNotFoundError, subprocess.SubprocessError):
+        # Try `sshd` unit too
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", "sshd"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            enabled = r.stdout.strip() == "active"
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+
+    key_count = 0
+    for u in ("pi01", "ubuntu", "pi"):
+        ak = _P(f"/home/{u}/.ssh/authorized_keys")
+        if ak.is_file():
+            try:
+                key_count += sum(
+                    1
+                    for ln in ak.read_text().splitlines()
+                    if ln.strip() and not ln.startswith("#")
+                )
+            except OSError:
+                pass
+
+    last_login = "—"
+    try:
+        r = subprocess.run(
+            ["last", "-n", "1", "-F"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            last_login = r.stdout.splitlines()[0].strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        pass
+
+    return {
+        "enabled": enabled,
+        "port": 22,
+        "key_count": key_count,
+        "last_login": last_login,
     }
 
 
 @router.get("/storage")
 async def storage_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    """Real disk usage for the photos partition."""
+    import shutil as _shutil  # noqa: PLC0415
+
     settings = get_settings()
     snap = snapshot()
+    cap = used = 0
+    fs = "—"
+    try:
+        usage = _shutil.disk_usage(str(settings.paths.photos))
+        cap = usage.total
+        used = usage.used
+    except OSError:
+        pass
+    # Try to read the filesystem type from /proc/mounts.
+    try:
+        photos_path = str(settings.paths.photos)
+        with open("/proc/mounts") as f:
+            best_mp = ""
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 3:
+                    mp = fields[1]
+                    if photos_path.startswith(mp) and len(mp) > len(best_mp):
+                        best_mp = mp
+                        fs = fields[2]
+    except OSError:
+        pass
     return {
         "photos_root": str(settings.paths.photos),
         "thumb_root": str(settings.paths.thumbnails),
         "disk_used_pct": snap["disk_used_pct"],
+        "capacity_bytes": cap,
+        "used_bytes": used,
+        "fs": fs,
     }
 
 
 @router.get("/system")
 async def system_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    """Real Pi 5 hardware identity."""
+    from arclap_station import __version__ as _arclap_version  # noqa: PLC0415
+
     return {
-        "version": "0.1.0",
+        "version": _arclap_version,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "snapshot": snapshot(),
+        "hw_model": _hw_model(),
+        "hw_serial": _hw_serial(),
+        "uptime_seconds": snapshot().get("uptime_seconds", 0),
     }
+
+
+def _hw_model() -> str:
+    """Read /sys/firmware/devicetree/base/model — e.g. 'Raspberry Pi 5 Model B Rev 1.0'."""
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    p = _P("/sys/firmware/devicetree/base/model")
+    if not p.is_file():
+        return "Unknown"
+    try:
+        return p.read_text(errors="replace").rstrip("\x00").strip()
+    except OSError:
+        return "Unknown"
+
+
+def _hw_serial() -> str:
+    """Read CPU serial from /proc/cpuinfo (the 'Serial' line)."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("Serial"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "—"
 
 
 @router.get("/audit/recent")
