@@ -223,21 +223,13 @@ export function Terminal() {
                 gap: 10,
               }}
             >
-              <span style={{ display: "inline-flex", gap: 5 }}>
-                {["#ef4444", "#f59e0b", "#10b981"].map((c, i) => (
-                  <span
-                    key={i}
-                    style={{ width: 11, height: 11, borderRadius: "50%", background: c }}
-                  />
-                ))}
-              </span>
               <div
                 className="mono"
                 style={{
                   fontSize: 11,
                   color: "var(--as-ink-3)",
                   flex: 1,
-                  textAlign: "center",
+                  textAlign: "left",
                 }}
               >
                 arclap@station:~ — xterm.js {resizing ? "· resizing" : ""}

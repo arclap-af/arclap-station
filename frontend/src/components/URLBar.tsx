@@ -10,12 +10,7 @@ export function URLBar({ ip, hostname, status }: URLBarProps) {
   const statusLabel = status === "online" ? "online" : status === "warn" ? "warn" : "offline";
   return (
     <div className="as-urlbar">
-      <span style={{ display: "inline-flex", gap: 5 }}>
-        {["#ef4444", "#f59e0b", "#10b981"].map((c, i) => (
-          <span key={i} className="dot" style={{ background: c }} />
-        ))}
-      </span>
-      <span className="url" style={{ marginLeft: 8 }}>
+      <span className="url">
         {/* Derive from window.location so the cockpit's actual scheme
             (https with the Caddy self-signed cert) shows correctly; also
             falls back to hostname when ip is unknown ('—'). */}
