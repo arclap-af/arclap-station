@@ -69,13 +69,26 @@ class FTPUploader:
         except Exception as exc:  # noqa: BLE001
             raise UploadError(f"ftp connect failed: {exc}") from exc
         try:
-            key = f"arclap-probe-{int(time.time())}.txt"
-            ftp.storbinary(f"STOR {key}", io.BytesIO(b"x"))
-            sink = io.BytesIO()
-            ftp.retrbinary(f"RETR {key}", sink.write)
-            if sink.getvalue() != b"x":
-                raise UploadError("ftp probe body mismatch")
-            ftp.delete(key)
+            # Use a .jpg extension — many camera-photo FTP intakes
+            # (e.g. teleport.io, ftptoday/ipcam services, Tuya FTP)
+            # reject anything that isn't .jpg/.mp4 with a generic
+            # `534 Request denied for policy reasons`, which is
+            # indistinguishable from a TLS policy mismatch unless you
+            # know to look for the welcome banner. The 4 bytes below
+            # are a syntactically-minimal JPEG (SOI + EOI markers) so
+            # content-sniffing intakes accept them.
+            key = f"arclap-probe-{int(time.time())}.jpg"
+            ftp.storbinary(f"STOR {key}", io.BytesIO(b"\xff\xd8\xff\xd9"))
+            # We deliberately don't RETR or require DELE to succeed.
+            # Upload-only intakes typically move the file out of the
+            # client-visible tree on STOR completion; RETR comes back
+            # 550 and DELE comes back 550 even though the upload was
+            # accepted. The STOR succeeding IS the proof the
+            # destination is usable. Best-effort cleanup below.
+            try:
+                ftp.delete(key)
+            except Exception:  # noqa: BLE001 - DELE may be policy-blocked
+                pass
         except Exception as exc:  # noqa: BLE001
             raise UploadError(f"ftp probe failed: {exc}") from exc
         finally:
