@@ -19,7 +19,13 @@ const DAY_LABELS: Array<[ScheduleType["days"][number], string]> = [
   ["sun", "S"],
 ];
 
-const INTERVALS = [5, 10, 15, 30, 60, 120];
+// Available capture-interval choices (minutes). The backend accepts
+// any integer from 1 to 1440; this list is the curated UI offering.
+// 1 min is included so timelapses of fast subjects (cranes lifting,
+// trucks queuing, etc.) can be captured at high enough cadence for
+// smooth playback — the camera + uploader pipeline finishes a still
+// well within 60 s on the EOS 5D MkIV + local-FS / FTP combo.
+const INTERVALS = [1, 5, 10, 15, 30, 60, 120];
 
 export function SchedulePage() {
   const qc = useQueryClient();
@@ -150,7 +156,19 @@ export function SchedulePage() {
                       <span>Every {s.interval_minutes} min</span>
                       <span className="mono">{s.from_time} – {s.to_time}</span>
                       <span>{s.days.length === 7 ? "All days" : `${s.days.length} days`}</span>
-                      <span>→ {s.destination_label}</span>
+                      <span>→ {(() => {
+                        // Resolve the schedule's destination_id to a
+                        // friendly name from the live destinations list
+                        // so the row shows "New FTP destination · FTP"
+                        // instead of the raw UUID the backend persists
+                        // in dest_filter. Falls back to the bridge-side
+                        // label if the destination has been deleted
+                        // (UUID still in the schedule, no live match).
+                        if (!s.destination_id) return "All destinations";
+                        const d = destList.find((x) => x.id === s.destination_id);
+                        if (d) return `${d.name} · ${d.kind.toUpperCase()}`;
+                        return s.destination_label;
+                      })()}</span>
                     </div>
                   </div>
                   <div
