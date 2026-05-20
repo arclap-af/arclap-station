@@ -39,7 +39,27 @@ class Destination:
     last_error: str | None
 
     def to_dict(self, *, redact: bool = True) -> dict[str, Any]:
+        """Serialise for the cockpit.
+
+        Includes upload-queue counters and a today-bytes total so the
+        Destinations cards in the cockpit stop reading "Last sync:
+        never · Queue: 0 · Failed: 0" forever. Earlier versions
+        emitted only the static fields below; the bridge fell back to
+        zeros for everything else and the operator concluded the
+        queue was broken.
+
+        `retry_policy` + `encrypt_in_transit` round-trip through the
+        config dict so an operator who set 3× retries on creation
+        sees 3× on the card next time they load the page (the bridge
+        previously defaulted to 3 / true with no persistence).
+        """
         cfg = self.config if not redact else _redact(self.config)
+        try:
+            metrics = _destination_metrics(self.id)
+        except Exception:  # noqa: BLE001
+            # Metrics are non-critical — never let a transient DB
+            # error fail the destinations list.
+            metrics = {"queue_pending": 0, "queue_failed": 0, "bytes_today": 0}
         return {
             "id": self.id,
             "name": self.name,
@@ -47,8 +67,57 @@ class Destination:
             "config": cfg,
             "enabled": self.enabled,
             "last_ok_at": self.last_ok_at,
+            # Alias for the cockpit which reads `last_sync` on the card.
+            "last_sync": self.last_ok_at,
             "last_error": self.last_error,
+            "queue_pending": metrics["queue_pending"],
+            "queue_failed": metrics["queue_failed"],
+            "bytes_today": metrics["bytes_today"],
+            # Persisted inside the config so the cockpit's toggles
+            # round-trip. Fall back to safe defaults for older rows.
+            "retry_policy": int(self.config.get("retry_policy", 3)),
+            "encrypt_in_transit": bool(
+                self.config.get("encrypt_in_transit", True)
+            ),
         }
+
+
+def _destination_metrics(dest_id: str) -> dict[str, int]:
+    """One round-trip to gather queue-pending / queue-failed / bytes-today."""
+    db = get_db()
+    with db.connect() as conn:
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM upload_queue WHERE dest_id=? AND state NOT IN ('ok','failed_permanent')",
+            (dest_id,),
+        ).fetchone()
+        failed = conn.execute(
+            "SELECT COUNT(*) FROM upload_queue WHERE dest_id=? AND state='failed_permanent'",
+            (dest_id,),
+        ).fetchone()
+        # Photos uploaded today via this destination — join through
+        # upload_queue → photos.bytes (file size at register time).
+        # Best-effort; if the photos table doesn't have a size column
+        # (older installs) we just return 0.
+        try:
+            bytes_today = conn.execute(
+                """
+                SELECT COALESCE(SUM(p.bytes), 0)
+                FROM upload_queue q
+                JOIN photos p ON p.id = q.photo_id
+                WHERE q.dest_id=?
+                  AND q.state='ok'
+                  AND DATE(q.updated_at)=DATE('now')
+                """,
+                (dest_id,),
+            ).fetchone()
+            bytes_today_n = int(bytes_today[0] or 0)
+        except Exception:  # noqa: BLE001
+            bytes_today_n = 0
+    return {
+        "queue_pending": int(pending[0] or 0),
+        "queue_failed": int(failed[0] or 0),
+        "bytes_today": bytes_today_n,
+    }
 
 
 _REDACT_KEYS = {

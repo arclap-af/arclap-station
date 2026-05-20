@@ -67,12 +67,23 @@ class WebhookUploader:
         return httpx.Client(timeout=self.timeout, verify=self.verify_tls)
 
     def test(self) -> dict[str, Any]:
-        probe = f"arclap-probe-{int(time.time())}".encode()
-        body = probe
+        # Mirror the upload() multipart shape so a real photo-intake
+        # webhook (which typically only accepts multipart/form-data
+        # with a `file` part) doesn't false-fail the probe. Earlier
+        # versions POSTed raw bytes which returned 400/415 against
+        # the very intakes the operator is trying to configure.
+        body = b"\xff\xd8\xff\xd9"  # 4-byte syntactically-valid JPEG
+        probe_name = f"arclap-probe-{int(time.time())}.jpg"
+        files = {"file": (probe_name, body, "image/jpeg")}
+        data = {"key": probe_name}
         try:
             with self._client() as client:
                 r = client.request(
-                    self.method, self.url, content=body, headers=self._headers(body)
+                    self.method,
+                    self.url,
+                    files=files,
+                    data=data,
+                    headers=self._headers(body),
                 )
                 r.raise_for_status()
         except Exception as exc:  # noqa: BLE001

@@ -49,10 +49,20 @@ function adapt(raw: Record<string, any>): Destination {
 }
 
 function toBackend(p: DestinationDraft): Record<string, unknown> {
+  // retry_policy + encrypt_in_transit are UI-level fields on the
+  // draft but the backend has no dedicated columns for them. Pack
+  // them into the config dict so they round-trip through the
+  // encrypted blob — the backend's to_dict() pulls them back out
+  // for the cockpit to render. Previously these were dropped on
+  // create, so the cockpit's toggles were pure theatre.
   return {
     name: p.name,
     type: p.kind,
-    config: p.config,
+    config: {
+      ...p.config,
+      retry_policy: p.retry_policy,
+      encrypt_in_transit: p.encrypt_in_transit,
+    },
     enabled: p.enabled,
   };
 }

@@ -361,6 +361,31 @@ class UploadQueue:
                 "WHERE id=?",
                 (state, err[:1024], item.id),
             )
+        # Audit event when retries are exhausted (permanent=True). The
+        # cockpit's Activity feed pulls these and the operator finally
+        # sees why their photos aren't landing — before this emit,
+        # `last_error` on the destination card was the only signal,
+        # and that gets cleared by any subsequent success so the
+        # evidence vanished. CLAUDE.md §12.10 requires we log this.
+        if permanent:
+            try:
+                from arclap_station.audit import emit as _audit  # noqa: PLC0415
+                _audit(
+                    "system",
+                    "upload.failed_permanent",
+                    {
+                        "queue_item_id": item.id,
+                        "photo_id": item.photo_id,
+                        "dest_id": item.dest_id,
+                        "attempts": item.attempts + 1,
+                        "last_error": err[:512],
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                # Audit must not block recovery — if the audit log is
+                # itself jammed (rare; FS full) we still want the
+                # queue worker to keep moving on to the next item.
+                pass
 
 
 _queue: UploadQueue | None = None

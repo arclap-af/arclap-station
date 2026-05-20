@@ -55,16 +55,34 @@ class S3Uploader:
         return suffix.lstrip("/")
 
     def test(self) -> dict[str, Any]:
-        key = self._key(f"arclap-probe-{int(time.time())}.txt")
+        # Use .jpg + a minimal valid JPEG body so MIME-sniffing
+        # buckets / fronting Lambdas accept it, matching the FTP
+        # probe convention. The PUT alone proves the credentials +
+        # bucket are reachable; GET-back confirms read consistency.
+        # DELETE is best-effort: locked-down production buckets
+        # commonly grant PutObject but deny DeleteObject (object lock,
+        # immutability, least-privilege IAM). False-negativing the
+        # probe on such a bucket would tell the operator their setup
+        # is broken when it isn't.
+        key = self._key(f"arclap-probe-{int(time.time())}.jpg")
+        body = b"\xff\xd8\xff\xd9"
         try:
-            self._client.put_object(Bucket=self.bucket, Key=key, Body=b"x")
+            self._client.put_object(Bucket=self.bucket, Key=key, Body=body)
             obj = self._client.get_object(Bucket=self.bucket, Key=key)
-            body = obj["Body"].read()
-            if body != b"x":
+            got = obj["Body"].read()
+            if got != body:
                 raise UploadError("s3 probe body mismatch")
-            self._client.delete_object(Bucket=self.bucket, Key=key)
         except Exception as exc:  # noqa: BLE001 - botocore raises a tower of exception classes
             raise UploadError(f"s3 probe failed: {exc}") from exc
+        # Best-effort cleanup — never let a permission-denied delete
+        # fail the probe.
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=key)
+        except Exception as exc:  # noqa: BLE001
+            log.info(
+                "s3 probe delete failed (probably DeleteObject denied — fine): %s",
+                exc,
+            )
         return {"ok": True, "bucket": self.bucket, "region": self.region}
 
     def upload(self, local: Path, key: str) -> dict[str, Any]:

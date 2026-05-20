@@ -257,6 +257,32 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
     dest_ids = list_destination_ids(sched.dest_filter)
     if dest_ids:
         get_queue().enqueue(record.id, dest_ids)
+    else:
+        # Orphan capture: photo is on the SD card but no enabled
+        # destination accepts it. Without this audit emit the photo
+        # would silently sit local forever, the operator would see
+        # the captures-today counter going up but nothing landing
+        # at the configured destination, and have no breadcrumb
+        # explaining why.
+        try:
+            from arclap_station.audit import emit as _audit  # noqa: PLC0415
+            _audit(
+                "system",
+                "capture.orphan",
+                {
+                    "photo_id": record.id,
+                    "schedule_id": schedule_id,
+                    "dest_filter": sched.dest_filter,
+                    "reason": "no_matching_destination",
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        log.warning(
+            "capture %s has no destination (filter=%s) — photo stays local",
+            record.id,
+            sched.dest_filter,
+        )
     return {
         "ok": True,
         "photo_id": record.id,
