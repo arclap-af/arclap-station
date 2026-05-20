@@ -145,6 +145,18 @@ class _GPhoto2Backend:
         self._cam: Any | None = None
         self._info: CameraInfo | None = None
         self._configured: bool = False
+        # libgphoto2 is not thread-safe at the device level. Without this
+        # lock, concurrent /api/camera/* requests (the Camera page fires
+        # info, settings and properties in parallel via React Query) all
+        # race into gp.Camera().init() at once — only one wins, the rest
+        # collide on the USB interface and return -7 "I/O problem". An
+        # RLock serialises every public method below; reentrancy means
+        # methods that delegate (e.g. capture() -> _ensure()) don't
+        # deadlock against themselves. The capture watchdog Timer
+        # deliberately stays outside the lock — it touches self._cam
+        # directly so it can force-close a hung handle from another
+        # thread without waiting for the capture call to release.
+        self._lock: threading.RLock = threading.RLock()
 
     # ---- handle lifecycle (B, C) ----------------------------------------
 
@@ -165,59 +177,63 @@ class _GPhoto2Backend:
         failure on record. After a recent failure we fail-fast on a
         single attempt to keep the API event loop responsive while the
         camera is physically absent or locked up.
+
+        Serialised by self._lock so concurrent callers don't race into
+        gp.Camera().init() and collide on the USB interface (-7 errors).
         """
         import time as _t  # noqa: PLC0415
 
-        # G: respect post-reset grace.
-        if self._reset_grace_remaining() > 0:
-            raise self._gp.GPhoto2Error(-1, "post-reset grace period")
+        with self._lock:
+            # G: respect post-reset grace.
+            if self._reset_grace_remaining() > 0:
+                raise self._gp.GPhoto2Error(-1, "post-reset grace period")
 
-        if self._cam is not None:
-            return self._cam
+            if self._cam is not None:
+                return self._cam
 
-        # Decide retry budget based on recent health.
-        try:
-            from arclap_station.camera.health import read_state  # noqa: PLC0415
-            from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
-
-            st = read_state()
-            err_at = st.get("last_error_at")
-            if err_at:
-                try:
-                    age = (_dt.now(_UTC) - _dt.fromisoformat(err_at)).total_seconds()
-                    fail_fast = 0 <= age <= self.FAIL_FAST_WINDOW_SEC
-                except (ValueError, TypeError):
-                    fail_fast = False
-            else:
-                fail_fast = False
-        except Exception:  # noqa: BLE001
-            fail_fast = False
-
-        backoff: list[float] = [0.0] if fail_fast else [1.0, 3.0, 10.0]
-        last_exc: Exception | None = None
-        for attempt, wait in enumerate(backoff, start=1):
+            # Decide retry budget based on recent health.
             try:
-                cam = self._gp.Camera()
-                cam.init()
-                self._cam = cam
-                self._configured = False
-                self._after_init(cam)
-                return cam
-            except self._gp.GPhoto2Error as exc:
-                last_exc = exc
-                if not fail_fast:
-                    log.info(
-                        "camera init attempt %d/%d failed: %s — retrying in %.1fs",
-                        attempt,
-                        len(backoff),
-                        exc,
-                        wait,
-                    )
-                if attempt < len(backoff) and wait > 0:
-                    _t.sleep(wait)
-        # All attempts exhausted.
-        assert last_exc is not None
-        raise last_exc
+                from arclap_station.camera.health import read_state  # noqa: PLC0415
+                from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
+
+                st = read_state()
+                err_at = st.get("last_error_at")
+                if err_at:
+                    try:
+                        age = (_dt.now(_UTC) - _dt.fromisoformat(err_at)).total_seconds()
+                        fail_fast = 0 <= age <= self.FAIL_FAST_WINDOW_SEC
+                    except (ValueError, TypeError):
+                        fail_fast = False
+                else:
+                    fail_fast = False
+            except Exception:  # noqa: BLE001
+                fail_fast = False
+
+            backoff: list[float] = [0.0] if fail_fast else [1.0, 3.0, 10.0]
+            last_exc: Exception | None = None
+            for attempt, wait in enumerate(backoff, start=1):
+                try:
+                    cam = self._gp.Camera()
+                    cam.init()
+                    self._cam = cam
+                    self._configured = False
+                    self._after_init(cam)
+                    return cam
+                except self._gp.GPhoto2Error as exc:
+                    last_exc = exc
+                    if not fail_fast:
+                        log.info(
+                            "camera init attempt %d/%d failed: %s — retrying in %.1fs",
+                            attempt,
+                            len(backoff),
+                            exc,
+                            wait,
+                        )
+                    if attempt < len(backoff) and wait > 0:
+                        _t.sleep(wait)
+            # All attempts exhausted.
+            assert last_exc is not None
+            raise last_exc
 
     def _after_init(self, cam: Any) -> None:
         """Apply our per-session camera settings — fail-soft.
@@ -291,47 +307,51 @@ class _GPhoto2Backend:
     # ---- probes ----------------------------------------------------------
 
     def detect(self) -> CameraInfo:
-        try:
-            cam = self._ensure()
-        except self._gp.GPhoto2Error as exc:
-            log.info("no camera detected: %s", exc)
-            self._drop_handle()
-            self._beacon_failure(str(exc))
-            return CameraInfo(detected=False)
+        with self._lock:
+            try:
+                cam = self._ensure()
+            except self._gp.GPhoto2Error as exc:
+                log.info("no camera detected: %s", exc)
+                self._drop_handle()
+                self._beacon_failure(str(exc))
+                return CameraInfo(detected=False)
 
-        try:
-            summary = str(cam.get_summary())
-        except self._gp.GPhoto2Error:
-            summary = ""
-        info = CameraInfo(
-            detected=True,
-            model=_safe_config(cam, self._gp, "/main/status/cameramodel"),
-            serial=_safe_config(cam, self._gp, "/main/status/serialnumber"),
-            battery=_safe_config(cam, self._gp, "/main/status/batterylevel"),
-            lens=_safe_config(cam, self._gp, "/main/status/lensname"),
-            firmware=_safe_config(cam, self._gp, "/main/status/cameramodel"),
-            shutter_count=_safe_int_config(cam, self._gp, "/main/status/shuttercounter"),
-            summary=summary[:2048] if summary else None,
-        )
-        self._info = info
-        self._beacon_ok(info.model)
-        return info
+            try:
+                summary = str(cam.get_summary())
+            except self._gp.GPhoto2Error:
+                summary = ""
+            info = CameraInfo(
+                detected=True,
+                model=_safe_config(cam, self._gp, "/main/status/cameramodel"),
+                serial=_safe_config(cam, self._gp, "/main/status/serialnumber"),
+                battery=_safe_config(cam, self._gp, "/main/status/batterylevel"),
+                lens=_safe_config(cam, self._gp, "/main/status/lensname"),
+                firmware=_safe_config(cam, self._gp, "/main/status/cameramodel"),
+                shutter_count=_safe_int_config(cam, self._gp, "/main/status/shuttercounter"),
+                summary=summary[:2048] if summary else None,
+            )
+            self._info = info
+            self._beacon_ok(info.model)
+            return info
 
     def get_config(self, path: str) -> Any:
-        cam = self._ensure()
-        return _safe_config(cam, self._gp, path)
+        with self._lock:
+            cam = self._ensure()
+            return _safe_config(cam, self._gp, path)
 
     def set_config(self, path: str, value: Any) -> None:
-        cam = self._ensure()
-        widget = cam.get_single_config(path)
-        widget.set_value(value)
-        cam.set_single_config(path, widget)
+        with self._lock:
+            cam = self._ensure()
+            widget = cam.get_single_config(path)
+            widget.set_value(value)
+            cam.set_single_config(path, widget)
 
     def list_config(self) -> dict[str, Any]:
         from arclap_station.camera.properties import widget_tree_to_dict  # noqa: PLC0415
 
-        cam = self._ensure()
-        return widget_tree_to_dict(cam.get_config())
+        with self._lock:
+            cam = self._ensure()
+            return widget_tree_to_dict(cam.get_config())
 
     # ---- capture (D, E, I) ----------------------------------------------
 
@@ -354,6 +374,10 @@ class _GPhoto2Backend:
         gp = self._gp
         # I: arm a watchdog timer that force-closes the handle if the
         # capture call doesn't return within CAPTURE_TIMEOUT_SEC.
+        # The timer fires on a separate thread and intentionally does NOT
+        # acquire self._lock — it pokes self._cam.exit() directly so it
+        # can rescue a hung capture without deadlocking against the
+        # locked capture() body below.
         timed_out = {"flag": False}
 
         def _kill() -> None:
@@ -372,39 +396,40 @@ class _GPhoto2Backend:
         timer.daemon = True
         timer.start()
         try:
-            try:
-                cam = self._ensure()
-                self._wake_probe(cam)
-                file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
-            except gp.GPhoto2Error as exc:
-                log.info("camera capture failed (%s); reinitialising and retrying", exc)
-                self._drop_handle()
-                cam = self._ensure()
-                self._wake_probe(cam)
-                file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+            with self._lock:
+                try:
+                    cam = self._ensure()
+                    self._wake_probe(cam)
+                    file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
+                except gp.GPhoto2Error as exc:
+                    log.info("camera capture failed (%s); reinitialising and retrying", exc)
+                    self._drop_handle()
+                    cam = self._ensure()
+                    self._wake_probe(cam)
+                    file_path = cam.capture(gp.GP_CAPTURE_IMAGE)
 
-            if timed_out["flag"]:
-                raise gp.GPhoto2Error(-1, "capture timed out, handle force-closed")
+                if timed_out["flag"]:
+                    raise gp.GPhoto2Error(-1, "capture timed out, handle force-closed")
 
-            cam_file = cam.file_get(
-                file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL
-            )
-            target = dest_dir / file_path.name
-            if target.exists():
-                import time as _t  # noqa: PLC0415
-
-                stem, dot, ext = file_path.name.rpartition(".")
-                ns = _t.time_ns()
-                target = dest_dir / (
-                    f"{stem or file_path.name}-{ns}{('.' + ext) if dot else ''}"
+                cam_file = cam.file_get(
+                    file_path.folder, file_path.name, gp.GP_FILE_TYPE_NORMAL
                 )
-            cam_file.save(str(target))
-            try:
-                cam.file_delete(file_path.folder, file_path.name)
-            except gp.GPhoto2Error:
-                pass
-            self._beacon_ok(self._info.model if self._info else None)
-            return Path(str(target))
+                target = dest_dir / file_path.name
+                if target.exists():
+                    import time as _t  # noqa: PLC0415
+
+                    stem, dot, ext = file_path.name.rpartition(".")
+                    ns = _t.time_ns()
+                    target = dest_dir / (
+                        f"{stem or file_path.name}-{ns}{('.' + ext) if dot else ''}"
+                    )
+                cam_file.save(str(target))
+                try:
+                    cam.file_delete(file_path.folder, file_path.name)
+                except gp.GPhoto2Error:
+                    pass
+                self._beacon_ok(self._info.model if self._info else None)
+                return Path(str(target))
         except Exception as exc:
             self._beacon_failure(str(exc))
             raise
@@ -412,18 +437,20 @@ class _GPhoto2Backend:
             timer.cancel()
 
     def capture_preview(self) -> bytes:
-        try:
-            cam = self._ensure()
-            cam_file = cam.capture_preview()
-            data = cam_file.get_data_and_size()
-            self._beacon_ok(self._info.model if self._info else None)
-            return bytes(data)
-        except Exception as exc:
-            self._beacon_failure(str(exc))
-            raise
+        with self._lock:
+            try:
+                cam = self._ensure()
+                cam_file = cam.capture_preview()
+                data = cam_file.get_data_and_size()
+                self._beacon_ok(self._info.model if self._info else None)
+                return bytes(data)
+            except Exception as exc:
+                self._beacon_failure(str(exc))
+                raise
 
     def close(self) -> None:
-        self._drop_handle()
+        with self._lock:
+            self._drop_handle()
 
     # ---- health beacon (F) ----------------------------------------------
 
