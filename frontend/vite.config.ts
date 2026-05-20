@@ -3,7 +3,25 @@ import react from "@vitejs/plugin-react";
 import path from "node:path";
 
 // Built output lands in dist/ and is served by Caddy from /var/www/arclap.
-// In dev we proxy /api and /ws to the local FastAPI backend (port 8000).
+//
+// In dev `npm run dev` proxies /api + /ws to whatever ARCLAP_DEV_BACKEND
+// points at. Two common setups:
+//
+//   1. Local FastAPI on the dev machine (default):
+//        npm run dev
+//      Edits live-reload in ~100ms, backend is a fake camera + empty DB.
+//
+//   2. Live Pi (real camera, real schedules, real audit log):
+//        npm run dev:pi
+//      Equivalent to: ARCLAP_DEV_BACKEND=https://192.168.10.28 npm run dev
+//      You'll need to log in once via /login on http://localhost:5173/
+//      (the dev server proxies the auth cookie through to the Pi).
+//
+// To target a different Pi:
+//      ARCLAP_DEV_BACKEND=https://arclap-st-90107cb4.local npm run dev
+const DEV_BACKEND = process.env.ARCLAP_DEV_BACKEND || "http://127.0.0.1:8000";
+const wsBackend = DEV_BACKEND.replace(/^http/, "ws");
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -31,8 +49,20 @@ export default defineConfig({
     port: 5173,
     fs: { allow: [".."] },
     proxy: {
-      "/api": { target: "http://127.0.0.1:8000", changeOrigin: true },
-      "/ws": { target: "ws://127.0.0.1:8000", ws: true, changeOrigin: true },
+      "/api": {
+        target: DEV_BACKEND,
+        changeOrigin: true,
+        // The Pi serves its own self-signed cert (Caddy tls internal).
+        // We accept it here because the dev server is the only consumer
+        // and the connection is on a trusted LAN.
+        secure: false,
+      },
+      "/ws": {
+        target: wsBackend,
+        ws: true,
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
   test: {

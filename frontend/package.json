@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:pi": "cross-env ARCLAP_DEV_BACKEND=https://192.168.10.28 vite",
+    "dev:hostname": "cross-env ARCLAP_DEV_BACKEND=https://arclap-st-90107cb4.local vite"
   },
   "dependencies": {
     "@tanstack/react-query": "5.51.16",
@@ -42,6 +44,7 @@
     "tailwindcss": "3.4.6",
     "typescript": "5.5.3",
     "vite": "5.3.4",
-    "vitest": "2.0.4"
+    "vitest": "2.0.4",
+    "cross-env": "^7.0.3"
   }
 }
