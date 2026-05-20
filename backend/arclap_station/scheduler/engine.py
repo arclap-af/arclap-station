@@ -7,6 +7,7 @@ linked by id.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import uuid
@@ -48,6 +49,22 @@ class Schedule:
     def days(self) -> list[str]:
         return [d for d in self.days_csv.split(",") if d]
 
+    @property
+    def conditions_dict(self) -> dict[str, Any]:
+        """Parse the `conditions` JSON string into a dict.
+
+        `conditions` is stored as a JSON string in the DB (NULL allowed)
+        so we can add new flags without a schema migration. Returns an
+        empty dict on null / malformed / non-object payloads.
+        """
+        if not self.conditions:
+            return {}
+        try:
+            parsed = json.loads(self.conditions)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
     def to_dict(self) -> dict[str, Any]:
         # Resolve the actual next fire time from APScheduler for this
         # specific job (different from engine.next_fire_time() which
@@ -61,6 +78,7 @@ class Schedule:
                     next_at = job.next_run_time.isoformat()
         except Exception:  # noqa: BLE001
             pass
+        cond = self.conditions_dict
         return {
             "id": self.id,
             "name": self.name,
@@ -70,7 +88,18 @@ class Schedule:
             "days": self.days,
             "enabled": self.enabled,
             "dest_filter": self.dest_filter,
+            # `conditions` retained as the raw JSON string for any
+            # forensic / migration use; the UI reads the flat flags
+            # below so it doesn't have to parse JSON.
             "conditions": self.conditions,
+            # Flat-keyed flags from the conditions JSON. Default both
+            # to True — that's the safer behaviour for a schedule
+            # whose flags are unset (existing pre-feature rows) and
+            # matches the cockpit's "ON by default" UI.
+            "skip_disk_full": bool(cond.get("skip_disk_full", True)),
+            "skip_destinations_offline": bool(
+                cond.get("skip_destinations_offline", True)
+            ),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "next_fire_at": next_at,
@@ -107,6 +136,13 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
     sched = _row(row)
     if not sched.enabled:
         return {"ok": False, "skipped": True, "reason": "disabled"}
+    # Per-schedule skip-when flags from the conditions JSON. Default
+    # ON for both — matches the cockpit's default and is the safer
+    # behaviour for an unset (pre-feature) schedule.
+    cond = sched.conditions_dict
+    skip_disk_full = bool(cond.get("skip_disk_full", True))
+    skip_destinations_offline = bool(cond.get("skip_destinations_offline", True))
+
     decision = should_skip(
         days_csv=sched.days_csv,
         from_time=sched.from_time,
@@ -118,14 +154,46 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
         log.info("skipping capture: %s", decision.reason)
         return {"ok": False, "skipped": True, "reason": decision.reason}
 
+    # Skip-when-destinations-offline gate. We treat "offline" here as
+    # "no enabled destination matches this schedule's dest_filter".
+    # A truly unreachable destination still surfaces via its queue
+    # retries; this gate catches the upstream case where the operator
+    # has disabled every destination this schedule would route to,
+    # which would otherwise pile photos into a queue with nowhere
+    # to drain.
+    if skip_destinations_offline:
+        try:
+            from arclap_station.uploaders.manager import get_manager  # noqa: PLC0415
+            wanted_ids: set[str] | None = None
+            if sched.dest_filter:
+                wanted_ids = {x.strip() for x in sched.dest_filter.split(",") if x.strip()}
+            enabled_matches = [
+                d for d in get_manager().list()
+                if d.enabled and (wanted_ids is None or d.id in wanted_ids)
+            ]
+            if not enabled_matches:
+                log.info("skipping capture: no enabled destinations match filter")
+                return {
+                    "ok": False,
+                    "skipped": True,
+                    "reason": "destinations_offline",
+                }
+        except Exception as exc:  # noqa: BLE001
+            log.debug("destinations-offline check failed (continuing): %s", exc)
+
     adapter = get_adapter()
     info = adapter.detect()
     if not info.detected:
         return {"ok": False, "skipped": True, "reason": "no_camera"}
 
-    # Disk-pressure gate, same threshold as the API capture path. The
-    # nightly retention sweep is reactive; this stops the scheduler
-    # from filling the card between sweeps.
+    # Disk-pressure gate. Two thresholds:
+    #   * 2 % free — HARD floor. Always enforced regardless of the
+    #     schedule's preference, to prevent a card-full crash that
+    #     can corrupt the SQLite WAL.
+    #   * 10 % free — SOFT threshold, gated by `skip_disk_full`. The
+    #     cockpit UI exposes this as the "Disk > 90 %" toggle. With
+    #     the toggle off, we trust the operator (and the nightly
+    #     retention sweep) to manage capacity.
     try:
         import shutil as _shutil  # noqa: PLC0415
         photos_root = get_settings().paths.photos
@@ -139,6 +207,12 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
             except Exception:  # noqa: BLE001
                 pass
             return {"ok": False, "skipped": True, "reason": "disk_full"}
+        if skip_disk_full and free_pct < 10.0:
+            log.info(
+                "skipping capture: disk %.1f%% free, schedule skip_disk_full=on",
+                free_pct,
+            )
+            return {"ok": False, "skipped": True, "reason": "disk_high"}
     except (OSError, ValueError, ImportError):
         pass  # fall through — capture will fail loudly if disk is truly dead
 
@@ -244,9 +318,18 @@ class ScheduleEngine:
         enabled: bool = True,
         dest_filter: str | None = None,
         conditions: str | None = None,
+        skip_disk_full: bool = True,
+        skip_destinations_offline: bool = True,
     ) -> Schedule:
         sched_id = uuid.uuid4().hex
         days_csv = ",".join(days)
+        # If the caller passed a raw `conditions` JSON string, honour it.
+        # Otherwise build the JSON from the flat flags. Both flags
+        # default to True (safer behaviour + matches the UI's default).
+        conditions_str = conditions if conditions is not None else json.dumps({
+            "skip_disk_full": bool(skip_disk_full),
+            "skip_destinations_offline": bool(skip_destinations_offline),
+        })
         with self._db.tx() as conn:
             conn.execute(
                 """
@@ -263,7 +346,7 @@ class ScheduleEngine:
                     days_csv,
                     int(enabled),
                     dest_filter,
-                    conditions,
+                    conditions_str,
                 ),
             )
         self._sync_job(sched_id, interval_min, enabled)
@@ -281,23 +364,56 @@ class ScheduleEngine:
         enabled: bool | None = None,
         dest_filter: str | None = None,
         conditions: str | None = None,
+        skip_disk_full: bool | None = None,
+        skip_destinations_offline: bool | None = None,
+        clear_dest_filter: bool = False,
     ) -> Schedule | None:
         existing = self.get(sched_id)
         if existing is None:
             return None
         sets: list[str] = []
         params: list[Any] = []
+        # `dest_filter` needs special handling — None means "leave alone"
+        # but the caller also needs a way to clear it (set to NULL =
+        # "All destinations"). The frontend sends dest_filter=None to
+        # mean "clear" so we always write the value, including NULL.
+        # Using a sentinel arg `clear_dest_filter` keeps the existing
+        # signature working for non-API callers who genuinely don't
+        # want to touch this field.
         for key, val in [
             ("name", name),
             ("interval_min", interval_min),
             ("from_time", from_time),
             ("to_time", to_time),
-            ("dest_filter", dest_filter),
-            ("conditions", conditions),
         ]:
             if val is not None:
                 sets.append(f"{key}=?")
                 params.append(val)
+        if dest_filter is not None or clear_dest_filter:
+            sets.append("dest_filter=?")
+            params.append(dest_filter)
+        # Merge skip_* flags into the existing conditions JSON if
+        # either flag was provided. We always write the FULL conditions
+        # JSON so a partial update never strips the other flag.
+        if (
+            skip_disk_full is not None
+            or skip_destinations_offline is not None
+            or conditions is not None
+        ):
+            if conditions is not None:
+                # Caller passed raw JSON — trust it verbatim.
+                merged_cond = conditions
+            else:
+                cond = existing.conditions_dict.copy()
+                if skip_disk_full is not None:
+                    cond["skip_disk_full"] = bool(skip_disk_full)
+                if skip_destinations_offline is not None:
+                    cond["skip_destinations_offline"] = bool(
+                        skip_destinations_offline
+                    )
+                merged_cond = json.dumps(cond)
+            sets.append("conditions=?")
+            params.append(merged_cond)
         if days is not None:
             sets.append("days_csv=?")
             params.append(",".join(days))

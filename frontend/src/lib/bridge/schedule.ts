@@ -62,7 +62,12 @@ function adaptSchedule(raw: Record<string, any>): Schedule {
 }
 
 // Translate UI fields → backend payload (rename interval_minutes →
-// interval_min etc.).
+// interval_min etc.). All persisted fields go through here — earlier
+// versions of this function silently dropped skip_disk_full and
+// skip_destinations_offline, so the toggles on the form were pure
+// theatre. Both are now wired through to ScheduleCreate/UpdateRequest
+// on the backend, which merges them into the schedule's conditions
+// JSON, which fire_capture() then honours.
 function toBackendPayload(p: ScheduleDraft): Record<string, unknown> {
   return {
     name: p.name,
@@ -72,6 +77,8 @@ function toBackendPayload(p: ScheduleDraft): Record<string, unknown> {
     days: p.days,
     enabled: p.enabled,
     dest_filter: p.destination_id,
+    skip_disk_full: p.skip_disk_full,
+    skip_destinations_offline: p.skip_destinations_offline,
   };
 }
 

@@ -110,3 +110,100 @@ def test_scheduler_db_file_exists() -> None:
     # Some installations defer DB creation until first job runs; presence of
     # the path is enough for the spec.
     assert settings.paths.scheduler_db.parent.exists()
+
+
+def test_skip_flags_default_true_for_new_schedule() -> None:
+    """Schedules created without explicit skip flags must default both to True.
+
+    This matches the cockpit's default ON state for the Disk>90% and
+    Destinations-offline toggles. A schedule that came back with these
+    flags as False would surprise the operator by capturing through
+    storage exhaustion or while every destination is disabled.
+    """
+    eng = get_engine()
+    s = eng.create("default-flags", 5, "00:00", "23:59", days=["mon"])
+    d = s.to_dict()
+    assert d["skip_disk_full"] is True, "skip_disk_full should default ON"
+    assert d["skip_destinations_offline"] is True, (
+        "skip_destinations_offline should default ON"
+    )
+
+
+def test_skip_flags_round_trip_through_create() -> None:
+    """Both flags must persist through CREATE and be readable on next list().
+
+    Was broken before this fix: the API accepted the request but
+    silently dropped the flags, so reopening the schedule in the
+    cockpit showed them flipped to False — the exact "saving doesn't
+    keep my settings" symptom the operator reported.
+    """
+    eng = get_engine()
+    s = eng.create(
+        "explicit-off",
+        5,
+        "00:00",
+        "23:59",
+        days=["mon"],
+        skip_disk_full=False,
+        skip_destinations_offline=False,
+    )
+    d = s.to_dict()
+    assert d["skip_disk_full"] is False
+    assert d["skip_destinations_offline"] is False
+
+    # Read it back via list() — proves the DB stored the conditions JSON
+    # correctly and to_dict() can re-parse it on a fresh engine call.
+    [reloaded] = [r.to_dict() for r in eng.list() if r.id == s.id]
+    assert reloaded["skip_disk_full"] is False
+    assert reloaded["skip_destinations_offline"] is False
+
+
+def test_skip_flags_partial_update_preserves_other_flag() -> None:
+    """Updating one skip flag must not strip the other from the JSON.
+
+    Before this fix, conditions was overwritten as a single opaque
+    column; toggling one flag would wipe the other to its default.
+    """
+    eng = get_engine()
+    s = eng.create(
+        "two-flags",
+        5,
+        "00:00",
+        "23:59",
+        days=["mon"],
+        skip_disk_full=True,
+        skip_destinations_offline=False,
+    )
+    # Now toggle ONLY skip_disk_full to False; skip_destinations_offline
+    # must remain False.
+    updated = eng.update(s.id, skip_disk_full=False)
+    assert updated is not None
+    d = updated.to_dict()
+    assert d["skip_disk_full"] is False
+    assert d["skip_destinations_offline"] is False, (
+        "untouched flag was stripped — partial update overwrote conditions"
+    )
+
+
+def test_dest_filter_can_be_cleared_to_none() -> None:
+    """Update with clear_dest_filter=True must set dest_filter back to NULL.
+
+    The cockpit's "All destinations" choice maps to dest_filter=None.
+    Without the explicit clear flag, the engine's existing 'val is
+    not None' guard treats None as "leave alone", so an operator
+    could never switch a schedule from a specific destination back
+    to fanout.
+    """
+    eng = get_engine()
+    s = eng.create(
+        "with-filter",
+        5,
+        "00:00",
+        "23:59",
+        days=["mon"],
+        dest_filter="some-uuid",
+    )
+    assert s.dest_filter == "some-uuid"
+    updated = eng.update(s.id, dest_filter=None, clear_dest_filter=True)
+    assert updated is not None
+    assert updated.dest_filter is None

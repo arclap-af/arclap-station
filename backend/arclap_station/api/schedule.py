@@ -24,6 +24,8 @@ class ScheduleCreateRequest(BaseModel):
     days: list[str] = Field(default_factory=lambda: list(VALID_DAYS))
     enabled: bool = True
     dest_filter: str | None = None
+    skip_disk_full: bool = True
+    skip_destinations_offline: bool = True
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -33,7 +35,14 @@ class ScheduleUpdateRequest(BaseModel):
     to_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
     days: list[str] | None = None
     enabled: bool | None = None
+    # `dest_filter` is intentionally typed `str | None` but pydantic
+    # treats `null` and "missing" the same way at the field level. We
+    # need to distinguish "set to NULL" (= All destinations) from
+    # "leave alone". The update endpoint uses model_fields_set to
+    # detect explicit presence; see update_schedule() below.
     dest_filter: str | None = None
+    skip_disk_full: bool | None = None
+    skip_destinations_offline: bool | None = None
 
 
 def _validate_days(days: list[str]) -> list[str]:
@@ -65,6 +74,8 @@ async def create_schedule(
         days=days,
         enabled=payload.enabled,
         dest_filter=payload.dest_filter,
+        skip_disk_full=payload.skip_disk_full,
+        skip_destinations_offline=payload.skip_destinations_offline,
     )
     audit_emit("user", "schedule.create", {"id": sched.id, "name": sched.name})
     return sched.to_dict()
@@ -77,6 +88,12 @@ async def update_schedule(
     _: dict[str, Any] = Depends(require_session),
 ) -> dict[str, Any]:
     days = _validate_days(payload.days) if payload.days is not None else None
+    # `dest_filter` semantics: pydantic flattens missing and explicit-null
+    # into the same `None`. We use the request's `model_fields_set` to
+    # know whether the caller actually sent the key (so they can clear
+    # it to NULL = "All destinations") versus omitted it.
+    sent = payload.model_fields_set
+    clear_dest_filter = "dest_filter" in sent and payload.dest_filter is None
     updated = get_engine().update(
         sched_id,
         name=payload.name,
@@ -86,6 +103,9 @@ async def update_schedule(
         days=days,
         enabled=payload.enabled,
         dest_filter=payload.dest_filter,
+        clear_dest_filter=clear_dest_filter,
+        skip_disk_full=payload.skip_disk_full,
+        skip_destinations_offline=payload.skip_destinations_offline,
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="schedule not found")

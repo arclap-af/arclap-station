@@ -30,6 +30,12 @@ const INTERVALS = [1, 5, 10, 15, 30, 60, 120];
 export function SchedulePage() {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<ScheduleDraft | null>(null);
+  // Save-flow error surface. Was missing entirely — when a save
+  // failed (validation reject, network blip, anything), the modal
+  // stayed open and the Save button kept being clickable, but
+  // nothing visible happened. Operators reasonably concluded the
+  // schedule editor was broken and reverted to "delete + recreate".
+  const [saveError, setSaveError] = useState<string | null>(null);
   const { data: items = [] } = useQuery({ queryKey: ["schedule"], queryFn: schedule.list });
   // Real list of configured destinations — feeds the "Send to" dropdown
   // so the user can route this schedule to a specific destination
@@ -44,30 +50,40 @@ export function SchedulePage() {
   const create = useMutation({
     mutationFn: schedule.create,
     onSuccess: () => {
+      setSaveError(null);
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["schedule"] });
     },
+    onError: (e) =>
+      setSaveError(e instanceof Error ? e.message : String(e)),
   });
   const update = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: ScheduleDraft }) => schedule.update(id, payload),
     onSuccess: () => {
+      setSaveError(null);
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["schedule"] });
     },
+    onError: (e) =>
+      setSaveError(e instanceof Error ? e.message : String(e)),
   });
   const remove = useMutation({
     mutationFn: schedule.remove,
     onSuccess: () => {
+      setSaveError(null);
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["schedule"] });
     },
+    onError: (e) =>
+      setSaveError(e instanceof Error ? e.message : String(e)),
   });
   const setEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => schedule.setEnabled(id, enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["schedule"] }),
   });
 
-  const openExisting = (s: ScheduleType) =>
+  const openExisting = (s: ScheduleType) => {
+    setSaveError(null);
     setDraft({
       id: s.id,
       name: s.name,
@@ -81,8 +97,10 @@ export function SchedulePage() {
       destination_id: s.destination_id,
       destination_label: s.destination_label,
     });
+  };
 
-  const openNew = () =>
+  const openNew = () => {
+    setSaveError(null);
     setDraft({
       name: "New schedule",
       interval_minutes: 15,
@@ -95,6 +113,7 @@ export function SchedulePage() {
       destination_id: null,
       destination_label: "All destinations",
     });
+  };
 
   const toggleDay = (day: ScheduleType["days"][number]) => {
     if (!draft) return;
@@ -316,6 +335,25 @@ export function SchedulePage() {
                     ~<strong>{capturesPerDay(draft)}</strong> captures/day ·{" "}
                     <strong>{capturesPerDay(draft) * draft.days.length}</strong>/week
                   </div>
+                  {saveError && (
+                    <div
+                      role="alert"
+                      style={{
+                        marginTop: 12,
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        border: "1px solid var(--as-bad)",
+                        background: "color-mix(in srgb, var(--as-bad) 12%, transparent)",
+                        color: "var(--as-bad)",
+                        fontSize: 12.5,
+                      }}
+                    >
+                      <strong>Save failed</strong>
+                      <div style={{ marginTop: 4, fontFamily: "var(--as-mono)" }}>
+                        {saveError}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div style={{ padding: 14, borderTop: "1px solid var(--as-line)", display: "flex", justifyContent: "space-between", background: "var(--as-bg-2)" }}>
                   {draft.id ? (
