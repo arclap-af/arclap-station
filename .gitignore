@@ -60,3 +60,7 @@ SHA256SUMS
 docs/screenshots/*.png
 docs/screenshots/*.jpg
 !docs/screenshots/.gitkeep
+
+# Audit artifacts (overnight runs write findings + tooling venv here)
+.audit-logs/
+.audit-venv/

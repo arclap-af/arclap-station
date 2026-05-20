@@ -12,22 +12,76 @@ It's Python/FastAPI + Vite/React + TypeScript, designed to be flashed once and f
 
 ## 1. What it is
 
-A self-contained device controller you flash onto an SD card and put on a shelf. It exposes:
+A self-contained device controller you flash onto an SD card and put on a shelf. It survives 2-year unattended construction-site deployments. Current release: **v0.8.x**.
 
-- A **setup wizard** (Wi-Fi, time, login, camera, schedule, destinations, acceptance).
-- A **real-time MJPEG viewfinder** with shutter / aperture / ISO / WB controls.
-- **APScheduler** for time-lapse, single-shot bursts, and event-driven captures.
-- A **multi-destination uploader** with retries (S3 / SFTP / FTP / HTTPS webhook / local / MQTT).
-- A **restricted PTY terminal** in the browser for supported diagnostics.
-- A **signed acceptance report** that an installer or auditor can verify offline.
+**Capture + cockpit**
+- A **10-step setup wizard** (Wi-Fi, time, login, camera, schedule, destinations, acceptance).
+- A **real-time MJPEG viewfinder** with RGB histogram, edge-clipping indicators, and a mirror lock-up button.
+- The camera page uses **real gphoto2 choices** for ISO / shutter / aperture chips — no hardcoded lists.
+- **APScheduler** for time-lapse, single-shot bursts, and event-driven captures, persisted across reboots.
+- **EXIF auto-rotate + optional watermark** on every capture (serial · site · UTC timestamp).
+- **Perceptual-hash (dHash) deduplication** drops near-identical frames in a 10-min window — opt-in via `dedup_threshold`.
+- **Daily pre-rendered timelapse MP4s** rendered by ffmpeg at 03:30 — the strategic retention asset.
 
-Everything is in two repos: backend (`backend/arclap_station`) and frontend (`frontend/`). This README documents the deployment layer that turns those into a one-curl install on a fresh Pi.
+**Reliability layers (camera A–I, v0.5)**
+- USB autosuspend off for 8 camera vendors (Canon / Nikon / Sony / Fuji / Olympus / Panasonic / Pentax / Leica) via udev.
+- Auto-power-off disabled on the body via PTP after init.
+- Init retry with 1s / 3s / 10s backoff; pre-capture wake probe; capture target = SDRAM (never CF/SD card).
+- Cross-process **camera health beacon**; 15s grace after USB reset; firmware-lockup detection.
+- 45s in-thread capture timeout via `threading.Timer` (respects libgphoto2 thread affinity).
+- **Fail-fast adapter** (v0.6): camera API endpoints return in ms (not 20s) when the camera is unplugged.
+
+**Storage + retention**
+- **4-tier retention sweep** (HOT 7d / WARM 30d / COLD 90d / archive) with emergency mode at >95% disk.
+- **Daily gzipped state.db backup** to `/var/lib/arclap/backups/` with 7-day rotation.
+- **Weekly `PRAGMA integrity_check`** (Sunday 05:00) — catches SD-card wear before app errors.
+- **Disk-full gate**: capture refused at < 2% free with audited `capture.refused_disk_full` event.
+- SQLite tuned: WAL, busy_timeout=5s, synchronous=NORMAL, 32MB cache, 64MB mmap, 15-min periodic checkpoint.
+
+**Uploaders**
+- Multi-destination queue with retries: S3 · SFTP · Dropbox · HTTPS webhook · local · MQTT.
+- **Fernet-AEAD encryption** of destination secrets at rest.
+- **Circuit breaker** pauses the queue for 5 min when every destination has failed 10× in the last hour.
+
+**Networking**
+- **NTP fallback ladder**: Cloudflare → Google → pool.ntp.org.
+- **DNS fallback**: 1.1.1.1 / 9.9.9.9 / 8.8.8.8 with DNSOverTLS=opportunistic.
+- **Multi-NIC route priority**: ethernet (50) < WiFi (300) < cellular (600).
+- **WiFi credentials UI** via nmcli (scan + connect + forget; PSK never logged).
+- **Captive portal detection** via Cloudflare `generate_204` sentinel.
+- **WireGuard support tunnel** (outbound-only, cockpit toggle) for remote ops.
+- **MQTT heartbeat** every 30s for fleet management (when paired to the Admin Cockpit).
+
+**Security**
+- PIN bcrypt (rounds=12), per-IP brute-force lockout (5 in 15 min), PIN rotation reminder at >90 days.
+- **Audit log hash chain** with **signed export** (SHA-256 + optional Ed25519).
+- All 4 WebSocket endpoints auth-gated.
+- systemd hardening: ProtectSystem=strict, ProtectClock, ProtectHostname, RestrictAddressFamilies, KeyringMode=private, UMask=0027, NoNewPrivileges, RestrictNamespaces.
+- Caddy `tls internal`, ufw + fail2ban, SSH hardening (PasswordAuthentication no, MaxAuthTries 3).
+- **Danger Zone** endpoints (reboot, restart-service, factory-reset) gated by PIN re-entry.
+
+**Observability**
+- **Prometheus `/metrics`** endpoint (request counter + latency histogram + system gauges).
+- **`/api/diag/*`**: services, SMART, boot-history, slow-log, percentiles (p50/p95), tunnel, support-bundle, sentry-status.
+- **`arclap-station support-bundle`** writes a redacted `.tar.gz` (logs + gzipped DB dump + dmesg + audit tail) for support tickets.
+- **Python faulthandler** → crash traceback to `/var/log/arclap/crash-<pid>.txt` on SIGSEGV / SIGFPE / SIGABRT.
+- **Sentry crash reporting** (opt-in via `SENTRY_DSN`).
+- **Camera flap detection** (≥3 recoveries/hour → `camera.flapping` audit).
+
+**Cockpit UX**
+- **xterm.js terminal** with full ANSI colour, scrollback, copy/paste, arrow-key history, plus a sidebar of categorised quick-commands.
+- **Keyboard shortcuts**: `g h/c/g/s/d/t/n` page nav, `c` capture, `r` reconnect, `/` focus search, `?` shortcut help.
+- **Toast queue** (5 stacked, click-dismiss).
+- **Help tooltips** with doc deep-links.
+- **Mobile-responsive CSS**: ≤900 px (tablet, 44 px tap targets) and ≤600 px (phone, full-screen modals, viewfinder vh cap). `prefers-reduced-motion` + `pointer:coarse` honored.
+
+Everything is in two repos: backend (`backend/arclap_station` — 66 .py files) and frontend (`frontend/` — Vite + React 18 + TypeScript). The deployment layer turns those into a one-curl install on a fresh Pi.
 
 ---
 
 ## 2. Quick install
 
-SSH into a freshly flashed Pi 5 running Raspberry Pi OS Bookworm 64-bit and run:
+SSH into a freshly flashed Pi 5 running **Ubuntu 26.04 Server (arm64)** and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh | sudo bash
@@ -37,8 +91,32 @@ Pin a specific release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh \
-  | sudo ARCLAP_VERSION=v0.1.0 bash
+  | sudo ARCLAP_VERSION=v0.8.0 bash
 ```
+
+Alternative (offline / from a cloned repo):
+
+```bash
+sudo apt update && sudo apt install -y git
+git clone https://github.com/arclap-af/arclap-station.git
+cd arclap-station
+sudo bash install.sh
+```
+
+The 12-step installer runs:
+
+1. apt deps (libgphoto2-dev, ffmpeg, caddy, nmcli, smartmontools, ufw, fail2ban).
+2. Create `arclap` system user + dirs (`/etc/arclap`, `/var/lib/arclap`, `/var/log/arclap`).
+3. Install Python wheel into `/opt/arclap-station/venv`.
+4. Install frontend bundle into `/var/www/arclap`.
+5. Install udev rules (camera USB autosuspend off for 8 vendors).
+6. Install systemd units + drop-ins (timesyncd / resolved / NetworkManager / journald).
+7. Install Caddy config (TLS internal, hostname `arclap-st-<last-8-of-cpu-serial>.local`).
+8. Install Avahi/mDNS broadcast.
+9. ufw + fail2ban + SSH hardening.
+10. Reload systemd, enable + start `arclap-station` + `caddy` + 6 timers.
+11. Wait for `/api/health` to return 200.
+12. Print the cockpit URL.
 
 After the install finishes (~3 minutes on first boot), the script prints:
 
