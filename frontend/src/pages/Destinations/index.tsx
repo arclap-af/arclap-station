@@ -94,7 +94,13 @@ export function Destinations() {
       retry_policy: d.retry_policy,
       encrypt_in_transit: d.encrypt_in_transit,
     });
-    setTestRanOk(true);
+    // Force a fresh Test before saving an edited destination. Was
+    // previously `true` (auto-pass) which let the operator hit Save
+    // even after changing values that would break uploads — and
+    // because secrets come back as bullet sentinels, that path was
+    // the trigger for accidental credential corruption.
+    setTestRanOk(false);
+    setTestResult(null);
   };
 
   // Type-specific config defaults. The forms used to show these via
@@ -141,12 +147,15 @@ export function Destinations() {
       timeout_seconds: "10",
     },
     mqtt: {
-      host: "",
-      port: "8883",
-      username: "",
-      password: "",
-      topic: "arclap/station/{station_id}/photos",
-      qos: "1",
+      // MQTTForm reads config.broker (a URL) + config.topic +
+      // config.client_id. Earlier defaults seeded `host` / `port` /
+      // `username` / `password` which the form never reads — so the
+      // operator saw the form's `??` placeholders but the actual
+      // config was empty, causing the same class of silent
+      // misconfiguration the local destination had.
+      broker: "mqtts://broker.example.com:8883",
+      topic: "arclap/{station}/photos",
+      client_id: "",
     },
     arc: {},
   };

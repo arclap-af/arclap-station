@@ -65,14 +65,46 @@ _REDACT_KEYS = {
     "key_pem",
 }
 
+# The literal string the cockpit sees in place of any secret field.
+# When the operator edits a destination and saves without retyping a
+# secret, the form sends THIS back; we must detect it on the update
+# path and substitute the stored value to avoid clobbering credentials.
+_REDACT_SENTINEL = "•" * 8
+
 
 def _redact(cfg: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in cfg.items():
         if k in _REDACT_KEYS and v:
-            out[k] = "•" * 8
+            out[k] = _REDACT_SENTINEL
         else:
             out[k] = v
+    return out
+
+
+def _restore_redacted_secrets(
+    incoming: dict[str, Any], existing: dict[str, Any]
+) -> dict[str, Any]:
+    """Replace bullet-sentinel values with the existing stored secret.
+
+    Critical data-loss prevention. When the cockpit GETs an existing
+    destination, every secret comes back redacted as eight bullet
+    characters. If the operator edits anything else (name, mode,
+    remote_path) and clicks Save, the form re-sends ``password:
+    "••••••••"`` (the literal it received). Without this check, we'd
+    encrypt the bullets and persist them as the new password, breaking
+    every subsequent upload — and the original credential is gone.
+
+    Resolution rule: for any key in ``_REDACT_KEYS`` where the incoming
+    value is exactly the redaction sentinel, fall back to the
+    pre-existing stored value. Empty string is treated as "operator
+    explicitly cleared this field" and DOES overwrite (so credentials
+    can be removed).
+    """
+    out: dict[str, Any] = dict(incoming)
+    for k in _REDACT_KEYS:
+        if k in out and out[k] == _REDACT_SENTINEL:
+            out[k] = existing.get(k, "")
     return out
 
 
@@ -208,8 +240,13 @@ class DestinationManager:
             fields.append("name=?")
             params.append(name)
         if config is not None:
+            # Restore any secret that arrived as the bullet sentinel —
+            # the cockpit's edit form starts with redacted values, so
+            # an unmodified Save would otherwise overwrite the real
+            # credential with eight bullet characters.
+            merged_config = _restore_redacted_secrets(config, existing.config)
             fields.append("config_json=?")
-            params.append(encrypt_config(config))
+            params.append(encrypt_config(merged_config))
         if enabled is not None:
             fields.append("enabled=?")
             params.append(int(enabled))
