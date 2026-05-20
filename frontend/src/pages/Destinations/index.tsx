@@ -138,7 +138,13 @@ export function Destinations() {
       security: "plain",
     },
     local: {
-      path: "/media/usb-photos",
+      // Default to a path that's writable out-of-the-box under the
+      // arclap-station systemd unit. `/media/...` requires both a
+      // mounted USB stick AND a ReadWritePaths extension (we now
+      // ship one — see systemd unit), but the default needs to
+      // work zero-config so the operator can verify the capture →
+      // upload pipeline without first plugging anything in.
+      path: "/var/lib/arclap/local-photos",
       when_full: "stop",
     },
     webhook: {

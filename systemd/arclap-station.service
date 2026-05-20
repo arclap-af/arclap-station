@@ -104,7 +104,22 @@ AmbientCapabilities=
 # Writable paths. /media/sdcard/photos is the only path under /media we
 # touch; listing /media/sdcard (parent) requires it to exist or systemd
 # refuses namespace setup. Use the actual write target instead.
-ReadWritePaths=/etc/arclap /var/lib/arclap /var/log/arclap /media/sdcard/photos /etc/systemd/resolved.conf.d /etc/systemd/timesyncd.conf.d
+# Writable paths under the strict-system mount namespace:
+#   /etc/arclap           — operator-editable config (auth.json, station.json)
+#   /var/lib/arclap       — DB + state + photos when no SD is mounted
+#                            (also the default location for `local` destinations)
+#   /var/log/arclap       — audit-log + diagnostics dumps
+#   /media                — auto-mounted USB sticks / NAS shares.
+#                            Operator-configurable `local` destinations target
+#                            paths here, e.g. /media/usb-photos. Without this
+#                            entry the strict-system FS made every mkdir under
+#                            /media fail EROFS, so external storage couldn't
+#                            ever be written to. The dir itself stays
+#                            root-owned; per-mount points get arclap-writable
+#                            chown when the operator creates the destination.
+#   /media/sdcard/photos  — primary on-Pi photo storage path
+#   /etc/systemd/{resolved,timesyncd}.conf.d — DNS / NTP editor writes drop-ins here
+ReadWritePaths=/etc/arclap /var/lib/arclap /var/log/arclap /media /media/sdcard/photos /etc/systemd/resolved.conf.d /etc/systemd/timesyncd.conf.d
 ReadOnlyPaths=-/opt/arclap-station
 
 # Standard streams → journald.
