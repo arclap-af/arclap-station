@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../components/Button";
@@ -15,10 +15,31 @@ export function Gallery() {
   const [open, setOpen] = useState<Photo | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const { data: photos = [] } = useQuery({
+  const {
+    data: photos = [],
+    refetch,
+    isFetching,
+    dataUpdatedAt,
+  } = useQuery({
     queryKey: ["gallery", filter, query],
     queryFn: () => gallery.list({ filter, query }),
+    // Auto-refresh every 10 s so newly-captured photos appear without
+    // the operator having to manually click Refresh after every
+    // scheduled capture. The Refresh button + "Updated Xs ago"
+    // indicator below make the auto-poll cadence visible.
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
   });
+
+  // Tick once per second so the "Updated Xs ago" label is live.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const updatedAgoSec = dataUpdatedAt
+    ? Math.max(0, Math.floor((now - dataUpdatedAt) / 1000))
+    : null;
 
   const grouped = useMemo(() => {
     const g: Record<string, Photo[]> = {};
@@ -64,10 +85,43 @@ export function Gallery() {
   return (
     <div className="as-scroll">
       <div className="as-page" style={{ maxWidth: 1300 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14, gap: 12 }}>
           <div>
             <h1 className="as-h1">Gallery</h1>
             <div className="as-h1-sub">Every photo captured by this station · {photos.length} files · {fmtBytes(totalBytes)}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span
+              style={{
+                fontSize: 11,
+                color: "var(--as-ink-3)",
+                fontFamily: "var(--as-mono)",
+                minWidth: 110,
+                textAlign: "right",
+              }}
+              title={
+                dataUpdatedAt
+                  ? `Last refreshed at ${new Date(dataUpdatedAt).toLocaleTimeString()}`
+                  : "Not refreshed yet"
+              }
+            >
+              {isFetching
+                ? "refreshing…"
+                : updatedAgoSec === null
+                  ? "—"
+                  : updatedAgoSec < 2
+                    ? "just now"
+                    : `updated ${updatedAgoSec}s ago`}
+            </span>
+            <Button
+              style={{ padding: "6px 12px", fontSize: 12 }}
+              onClick={() => refetch()}
+              disabled={isFetching}
+              aria-label="Refresh gallery"
+              title="Force-refresh now (the gallery also auto-refreshes every 10 s)"
+            >
+              <Icon d={I.refresh} size={13} /> Refresh
+            </Button>
           </div>
         </div>
 
