@@ -137,6 +137,17 @@ class _GPhoto2Backend:
     # How long after a USB reset to skip self-init (let the kernel
     # finish re-enumerating before we slam in a new PTP session).
     POST_RESET_GRACE_SEC = 15.0
+    # J: stuck-libgphoto2 self-restart. After this many CONSECUTIVE final
+    # ensure() failures we self-terminate so systemd (Restart=always)
+    # brings us back with a fresh address space — the only known cure
+    # when libgphoto2's internal port-info cache wedges in a long-lived
+    # process after a USB reset / kernel re-enumeration. Each Reconnect
+    # click increments the counter by 1 (the reconnect path calls
+    # detect() exactly once). Background scheduler capture failures also
+    # increment. The cooldown below prevents loop-restarts when the
+    # camera is genuinely absent.
+    MAX_CONSECUTIVE_INIT_FAILURES = 3
+    SERVICE_RESTART_COOLDOWN_SEC = 300
 
     def __init__(self) -> None:
         import gphoto2 as gp  # noqa: PLC0415 - imported lazily on real Pi only
@@ -145,6 +156,9 @@ class _GPhoto2Backend:
         self._cam: Any | None = None
         self._info: CameraInfo | None = None
         self._configured: bool = False
+        # J: count of consecutive ensure() failures since the last
+        # successful init. Reset to 0 on any successful Camera().init().
+        self._consecutive_init_failures: int = 0
         # libgphoto2 is not thread-safe at the device level. Without this
         # lock, concurrent /api/camera/* requests (the Camera page fires
         # info, settings and properties in parallel via React Query) all
@@ -218,6 +232,11 @@ class _GPhoto2Backend:
                     self._cam = cam
                     self._configured = False
                     self._after_init(cam)
+                    # J: any successful init clears the stuck-camera
+                    # counter so transient hiccups don't accumulate
+                    # toward a restart over the course of a long
+                    # uptime.
+                    self._consecutive_init_failures = 0
                     return cam
                 except self._gp.GPhoto2Error as exc:
                     last_exc = exc
@@ -231,8 +250,18 @@ class _GPhoto2Backend:
                         )
                     if attempt < len(backoff) and wait > 0:
                         _t.sleep(wait)
-            # All attempts exhausted.
+            # All attempts exhausted. Bump the consecutive-failure
+            # counter and, if we're past the threshold, self-restart
+            # to clear any wedged libgphoto2 state. The check stays
+            # inside the lock so two concurrent failures can't both
+            # trip the threshold.
             assert last_exc is not None
+            self._consecutive_init_failures += 1
+            if (
+                self._consecutive_init_failures
+                >= self.MAX_CONSECUTIVE_INIT_FAILURES
+            ):
+                self._trigger_service_restart(last_exc)
             raise last_exc
 
     def _after_init(self, cam: Any) -> None:
@@ -289,6 +318,86 @@ class _GPhoto2Backend:
                 pass
         self._cam = None
         self._configured = False
+
+    # ---- stuck-camera self-restart (J) -----------------------------------
+
+    def _trigger_service_restart(self, last_exc: Exception) -> None:
+        """Last-resort recovery: terminate so systemd brings us back fresh.
+
+        libgphoto2's port-info cache lives in process memory. Certain
+        kernel-level USB events (re-enumeration after sleep, ``echo 0
+        >authorized`` resets, hub power-cycles) can leave the cache
+        pointing at a port descriptor that no longer exists. Every
+        subsequent ``Camera().init()`` then returns ``-7 I/O problem``
+        even though ``gphoto2 --auto-detect`` from a fresh CLI process
+        succeeds. The only known cure is a fresh address space.
+
+        We rely on systemd's ``Restart=always RestartSec=3`` to bring us
+        back within ~3 s. A sentinel file enforces a cooldown so that a
+        genuinely-absent camera doesn't loop-restart us indefinitely;
+        once the cooldown expires, if the camera is still stuck, we
+        restart once more.
+        """
+        import os as _os  # noqa: PLC0415
+        import time as _t  # noqa: PLC0415
+
+        sentinel = Path("/var/lib/arclap/last_camera_restart")
+        try:
+            last = float(sentinel.read_text().strip())
+            if _t.time() - last < self.SERVICE_RESTART_COOLDOWN_SEC:
+                log.warning(
+                    "stuck-camera self-restart suppressed — last fired %.0fs ago "
+                    "(cooldown %.0fs); %d consecutive init failures",
+                    _t.time() - last,
+                    self.SERVICE_RESTART_COOLDOWN_SEC,
+                    self._consecutive_init_failures,
+                )
+                # Reset counter so we don't try again immediately on the
+                # next ensure(). The cooldown is the rate-limit.
+                self._consecutive_init_failures = 0
+                return
+        except (OSError, ValueError):
+            # No sentinel yet, or it's malformed — first restart in
+            # this boot is allowed.
+            pass
+
+        try:
+            sentinel.parent.mkdir(parents=True, exist_ok=True)
+            sentinel.write_text(str(_t.time()))
+        except OSError as exc:
+            log.warning("could not write restart sentinel: %s", exc)
+
+        # Audit log entry per CLAUDE.md §12.10 — the cockpit needs to
+        # show "service auto-restarted to clear stuck camera" in the
+        # Recent Activity feed so operators understand the bump.
+        try:
+            from arclap_station.audit import emit as audit_emit  # noqa: PLC0415
+
+            audit_emit(
+                "system",
+                "camera.service_restart",
+                {
+                    "reason": "stuck_libgphoto2",
+                    "consecutive_failures": self._consecutive_init_failures,
+                    "last_error": str(last_exc),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            # Audit must not block restart — if the audit log itself
+            # is stuck we still want recovery.
+            pass
+
+        log.error(
+            "stuck-camera self-restart firing after %d consecutive init failures "
+            "(last error: %s) — systemd will restart us in 3s",
+            self._consecutive_init_failures,
+            last_exc,
+        )
+        # os._exit bypasses Python's atexit / SIGTERM handlers; a clean
+        # shutdown might re-enter libgphoto2 to release the wedged
+        # handle and hang there, which is exactly what we're trying to
+        # escape. Exit code 1 → systemd treats it as failure → restart.
+        _os._exit(1)
 
     # ---- post-reset grace (G) -------------------------------------------
 
