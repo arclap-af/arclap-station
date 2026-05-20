@@ -53,6 +53,21 @@ async def create_destination(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"unknown destination type: {payload.type}",
         )
+    # Validate the uploader can be constructed BEFORE we persist. The
+    # individual uploaders raise ValueError when required config keys
+    # are missing (e.g. `local` needs `path`, `ftp` needs `host`).
+    # Without this guard the manager would persist an unconstructable
+    # record and surface ValueError as a generic 500 on every
+    # subsequent list() call.
+    try:
+        factory = REGISTRY[payload.type]
+        probe = factory("probe", "probe", payload.config)
+        probe.close()
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid {payload.type} config: {exc}",
+        ) from exc
     dest = get_manager().create(
         name=payload.name,
         type_id=payload.type,
@@ -73,7 +88,20 @@ async def test_destination(
             status_code=status.HTTP_400_BAD_REQUEST, detail="unknown destination type"
         )
     factory = REGISTRY[payload.type]
-    uploader = factory("probe", "probe", payload.config)
+    # Construction itself can throw — the LocalUploader for example
+    # raises ValueError("local uploader requires 'path'") when the
+    # form sends an empty config. That used to bubble up as a
+    # generic 500 (no useful info for the operator). Catch it here
+    # and surface as 400 with the uploader's own message so the
+    # cockpit banner shows "invalid local config: ..." instead of
+    # the bare "HTTP 500 /api/destinations/test".
+    try:
+        uploader = factory("probe", "probe", payload.config)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid {payload.type} config: {exc}",
+        ) from exc
     try:
         result = uploader.test()
     except UploadError as exc:

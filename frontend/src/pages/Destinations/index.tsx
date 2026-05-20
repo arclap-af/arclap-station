@@ -97,6 +97,60 @@ export function Destinations() {
     setTestRanOk(true);
   };
 
+  // Type-specific config defaults. The forms used to show these via
+  // JSX `value={config.x ?? "DEFAULT"}` fallbacks, but the fallback
+  // ONLY affected the visible input — config itself stayed empty,
+  // and clicking Test sent `{}` to the backend which raised
+  // ValueError("uploader requires 'X'") and FastAPI surfaced it as
+  // HTTP 500. Pre-seeding here means whatever the operator sees in
+  // the form IS what gets sent.
+  const DEFAULT_CONFIG: Record<DestinationKind, Record<string, unknown>> = {
+    s3: {
+      endpoint: "https://s3.amazonaws.com",
+      region: "us-east-1",
+      bucket: "",
+      access_key: "",
+      secret_key: "",
+      prefix: "photos/{yyyy}/{mm}/{dd}/",
+    },
+    sftp: {
+      host: "",
+      port: "22",
+      user: "",
+      auth: "password",
+      password: "",
+      private_key: "",
+      remote_path: "/photos/{yyyy}/{mm}/{dd}/",
+    },
+    ftp: {
+      host: "",
+      port: "21",
+      user: "",
+      password: "",
+      mode: "passive",
+      remote_path: "/photos/{yyyy}/{mm}/{dd}/",
+      security: "plain",
+    },
+    local: {
+      path: "/media/usb-photos",
+      when_full: "stop",
+    },
+    webhook: {
+      url: "",
+      method: "POST",
+      timeout_seconds: "10",
+    },
+    mqtt: {
+      host: "",
+      port: "8883",
+      username: "",
+      password: "",
+      topic: "arclap/station/{station_id}/photos",
+      qos: "1",
+    },
+    arc: {},
+  };
+
   const startNew = (kind: DestinationKind) => {
     setPickerOpen(false);
     setTestRanOk(false);
@@ -105,7 +159,11 @@ export function Destinations() {
       kind,
       name: `New ${kind.toUpperCase()} destination`,
       enabled: true,
-      config: {},
+      // Spread the type-specific defaults so the form's placeholders
+      // are also what gets POSTed to /api/destinations/test on the
+      // first click — no more silent 500s when the operator just
+      // wants to verify the suggested defaults work.
+      config: { ...(DEFAULT_CONFIG[kind] ?? {}) },
       retry_policy: 3,
       encrypt_in_transit: true,
     });
