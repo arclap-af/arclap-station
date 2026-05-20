@@ -1,5 +1,6 @@
 import { useNavigate, useParams } from "react-router-dom";
 
+import { Activity } from "./tabs/Activity";
 import { Diagnostics } from "./tabs/Diagnostics";
 import { General } from "./tabs/General";
 import { Network } from "./tabs/Network";
@@ -15,6 +16,9 @@ const TABS = [
   { id: "storage", label: "Storage", Component: Storage },
   { id: "system", label: "System", Component: System },
   { id: "diagnostics", label: "Diagnostics", Component: Diagnostics },
+  // Activity = audit-log timeline ("what happened on this station").
+  // Distinct from Logs (which is raw journald — system / debug noise).
+  { id: "activity", label: "Activity", Component: Activity },
   { id: "logs", label: "Logs", Component: Logs },
 ] as const;
 

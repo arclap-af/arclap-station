@@ -100,6 +100,10 @@ class Schedule:
             "skip_destinations_offline": bool(
                 cond.get("skip_destinations_offline", True)
             ),
+            # When True (default), the local SD-card file is kept
+            # after upload. When False, the file is deleted once
+            # every destination has uploaded successfully.
+            "keep_local": bool(cond.get("keep_local", True)),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "next_fire_at": next_at,
@@ -346,15 +350,17 @@ class ScheduleEngine:
         conditions: str | None = None,
         skip_disk_full: bool = True,
         skip_destinations_offline: bool = True,
+        keep_local: bool = True,
     ) -> Schedule:
         sched_id = uuid.uuid4().hex
         days_csv = ",".join(days)
         # If the caller passed a raw `conditions` JSON string, honour it.
-        # Otherwise build the JSON from the flat flags. Both flags
+        # Otherwise build the JSON from the flat flags. All flags
         # default to True (safer behaviour + matches the UI's default).
         conditions_str = conditions if conditions is not None else json.dumps({
             "skip_disk_full": bool(skip_disk_full),
             "skip_destinations_offline": bool(skip_destinations_offline),
+            "keep_local": bool(keep_local),
         })
         with self._db.tx() as conn:
             conn.execute(
@@ -392,6 +398,7 @@ class ScheduleEngine:
         conditions: str | None = None,
         skip_disk_full: bool | None = None,
         skip_destinations_offline: bool | None = None,
+        keep_local: bool | None = None,
         clear_dest_filter: bool = False,
     ) -> Schedule | None:
         existing = self.get(sched_id)
@@ -424,6 +431,7 @@ class ScheduleEngine:
         if (
             skip_disk_full is not None
             or skip_destinations_offline is not None
+            or keep_local is not None
             or conditions is not None
         ):
             if conditions is not None:
@@ -437,6 +445,8 @@ class ScheduleEngine:
                     cond["skip_destinations_offline"] = bool(
                         skip_destinations_offline
                     )
+                if keep_local is not None:
+                    cond["keep_local"] = bool(keep_local)
                 merged_cond = json.dumps(cond)
             sets.append("conditions=?")
             params.append(merged_cond)

@@ -96,6 +96,7 @@ export function SchedulePage() {
       skip_destinations_offline: s.skip_destinations_offline,
       destination_id: s.destination_id,
       destination_label: s.destination_label,
+      keep_local: s.keep_local,
     });
   };
 
@@ -112,6 +113,9 @@ export function SchedulePage() {
       skip_destinations_offline: true,
       destination_id: null,
       destination_label: "All destinations",
+      // Default ON — safe. Operator must explicitly opt out of
+      // keeping a local copy.
+      keep_local: true,
     });
   };
 
@@ -329,6 +333,22 @@ export function SchedulePage() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--as-line)" }}>
                       <div style={{ fontSize: 13 }}>Destinations offline</div>
                       <Toggle on={draft.skip_destinations_offline} onChange={(v) => setDraft({ ...draft, skip_destinations_offline: v })} />
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 14px", border: "1px solid var(--as-line)", borderRadius: 8, background: "var(--as-bg-2)", marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: "var(--as-ink-3)", textTransform: "uppercase", letterSpacing: 0.06, fontWeight: 600, marginBottom: 10 }}>
+                      After upload
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
+                      <div>
+                        <div style={{ fontSize: 13 }}>Keep local copy</div>
+                        <div style={{ fontSize: 11, color: "var(--as-ink-3)", marginTop: 2 }}>
+                          {draft.keep_local
+                            ? "Photo stays on the SD card after upload. Retention policy reclaims space later."
+                            : "Photo is deleted from the SD card once every destination has uploaded successfully."}
+                        </div>
+                      </div>
+                      <Toggle on={draft.keep_local} onChange={(v) => setDraft({ ...draft, keep_local: v })} />
                     </div>
                   </div>
                   <div style={{ padding: "10px 14px", background: "var(--as-accent-soft)", borderRadius: 8, fontSize: 12, color: "var(--as-accent-2)" }}>

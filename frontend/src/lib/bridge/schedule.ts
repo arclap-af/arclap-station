@@ -12,6 +12,11 @@ export interface Schedule {
   enabled: boolean;
   skip_disk_full: boolean;
   skip_destinations_offline: boolean;
+  // When true (default), the SD-card copy of each photo stays after
+  // upload. When false, the photo is removed once every destination
+  // has acknowledged it — useful when an external FTP/S3 is the
+  // canonical store and the SD card is just the staging buffer.
+  keep_local: boolean;
   destination_id: string | null;
   destination_label: string;
   next_fire_at: string | null;
@@ -57,6 +62,9 @@ function adaptSchedule(raw: Record<string, any>): Schedule {
         : raw.dest_filter
           ? String(raw.dest_filter)
           : "All",
+    // Backend emits this flat key from the conditions JSON; default
+    // True keeps existing pre-feature schedules in their safe state.
+    keep_local: typeof raw.keep_local === "boolean" ? raw.keep_local : true,
     next_fire_at: typeof raw.next_fire_at === "string" ? raw.next_fire_at : null,
   };
 }
@@ -79,6 +87,7 @@ function toBackendPayload(p: ScheduleDraft): Record<string, unknown> {
     dest_filter: p.destination_id,
     skip_disk_full: p.skip_disk_full,
     skip_destinations_offline: p.skip_destinations_offline,
+    keep_local: p.keep_local,
   };
 }
 

@@ -26,6 +26,13 @@ class ScheduleCreateRequest(BaseModel):
     dest_filter: str | None = None
     skip_disk_full: bool = True
     skip_destinations_offline: bool = True
+    # When False, the local SD-card file is deleted once every
+    # configured destination has finished uploading successfully.
+    # When True (default — safe), the local copy is kept and the
+    # retention policy reclaims space later. Useful when an external
+    # FTP destination is the canonical store and the SD card is just
+    # the staging buffer.
+    keep_local: bool = True
 
 
 class ScheduleUpdateRequest(BaseModel):
@@ -43,6 +50,7 @@ class ScheduleUpdateRequest(BaseModel):
     dest_filter: str | None = None
     skip_disk_full: bool | None = None
     skip_destinations_offline: bool | None = None
+    keep_local: bool | None = None
 
 
 def _validate_days(days: list[str]) -> list[str]:
@@ -76,6 +84,7 @@ async def create_schedule(
         dest_filter=payload.dest_filter,
         skip_disk_full=payload.skip_disk_full,
         skip_destinations_offline=payload.skip_destinations_offline,
+        keep_local=payload.keep_local,
     )
     audit_emit("user", "schedule.create", {"id": sched.id, "name": sched.name})
     return sched.to_dict()
@@ -106,6 +115,7 @@ async def update_schedule(
         clear_dest_filter=clear_dest_filter,
         skip_disk_full=payload.skip_disk_full,
         skip_destinations_offline=payload.skip_destinations_offline,
+        keep_local=payload.keep_local,
     )
     if updated is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="schedule not found")

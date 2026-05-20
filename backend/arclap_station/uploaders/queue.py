@@ -322,6 +322,9 @@ class UploadQueue:
         self._destinations.mark_ok(dest.id)
 
     def _mark_ok(self, item: QueueItem) -> None:
+        all_done = False
+        photo_path: str | None = None
+        schedule_id: str | None = None
         with self._db.tx() as conn:
             conn.execute(
                 "UPDATE upload_queue SET state='ok', updated_at=datetime('now') WHERE id=?",
@@ -335,6 +338,80 @@ class UploadQueue:
                 conn.execute(
                     "UPDATE photos SET upload_state='done' WHERE id=?", (item.photo_id,)
                 )
+                # Fetch the photo's source path + originating schedule
+                # id so the keep-local hook below can decide whether
+                # to clean up. We do this inside the tx so the read
+                # is consistent with the state=done we just wrote.
+                prow = conn.execute(
+                    "SELECT path, job_id FROM photos WHERE id=?",
+                    (item.photo_id,),
+                ).fetchone()
+                if prow is not None:
+                    photo_path = prow[0]
+                    schedule_id = prow[1]
+                all_done = True
+
+        # Outside the tx — file deletion + audit are best-effort and
+        # mustn't hold the DB lock. Only relevant when EVERY destination
+        # for this photo has finished successfully.
+        if all_done and schedule_id and photo_path:
+            self._maybe_delete_local(photo_path, schedule_id, item.photo_id)
+
+    def _maybe_delete_local(
+        self, photo_path: str, schedule_id: str, photo_id: int
+    ) -> None:
+        """Delete the local SD-card file if the schedule says don't keep it.
+
+        Only triggered when a photo originated from a schedule
+        (job_id != NULL) AND every destination has uploaded
+        successfully. Manual captures (job_id=None) always keep their
+        local copy — there's no operator-set policy to drive a delete
+        on those, and Gallery thumbnails would break.
+        """
+        try:
+            with self._db.connect() as conn:
+                row = conn.execute(
+                    "SELECT conditions FROM schedules WHERE id=?",
+                    (schedule_id,),
+                ).fetchone()
+            if not row or not row[0]:
+                return
+            import json as _json  # noqa: PLC0415
+            try:
+                cond = _json.loads(row[0]) or {}
+            except (ValueError, TypeError):
+                return
+            if not isinstance(cond, dict) or cond.get("keep_local", True):
+                # Default behaviour: keep the local copy. Only delete
+                # if the schedule explicitly opted out.
+                return
+            # Belt-and-braces: confirm at least one destination uploaded
+            # successfully before deleting (a 0-destination edge case
+            # wouldn't have flipped all_done, but cheap to double-check).
+            from pathlib import Path as _P  # noqa: PLC0415
+            p = _P(photo_path)
+            if p.exists():
+                p.unlink()
+                log.info(
+                    "schedule keep_local=False: removed local file %s (photo %d)",
+                    photo_path,
+                    photo_id,
+                )
+                try:
+                    from arclap_station.audit import emit as _audit  # noqa: PLC0415
+                    _audit(
+                        "system",
+                        "photo.local_removed",
+                        {
+                            "photo_id": photo_id,
+                            "schedule_id": schedule_id,
+                            "reason": "keep_local=False after successful upload",
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as exc:  # noqa: BLE001
+            log.warning("keep_local delete failed for %s: %s", photo_path, exc)
 
     def _mark_retry(self, item: QueueItem, err: str) -> None:
         attempts = item.attempts + 1

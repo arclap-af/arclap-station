@@ -70,11 +70,22 @@ def apply_watermark_and_rotate(path: Path, *, force: bool = False) -> bool:
 
 
 def _wants_watermark(cfg: "object") -> bool:
-    # station.json field; fall back to False so we don't surprise customers.
+    """Should this capture get a burned-in timestamp watermark?
+
+    Default: True. Construction-site stations need every photo to
+    carry a visible timestamp + station id for legal / insurance
+    deliverables — that's the entire reason this code exists. The
+    operator can still turn it off explicitly by setting
+    `watermark: false` in station.json (or via Settings → General).
+    """
     try:
-        return bool(getattr(cfg, "watermark", False))
+        # Honour an explicit setting if present (True or False).
+        v = getattr(cfg, "watermark", None)
+        if v is None:
+            return True
+        return bool(v)
     except AttributeError:
-        return False
+        return True
 
 
 def _draw_watermark(img, cfg: "object") -> None:  # noqa: ANN001
