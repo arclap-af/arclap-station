@@ -7,6 +7,7 @@ import { Pill, StatusDot } from "../components/Pill";
 import { Toggle } from "../components/Toggle";
 import { Icon, I } from "../components/icons";
 import { schedule, type Schedule as ScheduleType, type ScheduleDraft } from "../lib/bridge/schedule";
+import { destinations as destinationsApi } from "../lib/bridge/destinations";
 
 const DAY_LABELS: Array<[ScheduleType["days"][number], string]> = [
   ["mon", "M"],
@@ -24,6 +25,15 @@ export function SchedulePage() {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<ScheduleDraft | null>(null);
   const { data: items = [] } = useQuery({ queryKey: ["schedule"], queryFn: schedule.list });
+  // Real list of configured destinations — feeds the "Send to" dropdown
+  // so the user can route this schedule to a specific destination
+  // (or leave it on "All" to fan out to every enabled one). Previously
+  // the dropdown was a hardcoded ["All", "S3 only", "Local only"]
+  // placeholder that ignored what the user had actually configured.
+  const { data: destList = [] } = useQuery({
+    queryKey: ["destinations"],
+    queryFn: destinationsApi.list,
+  });
 
   const create = useMutation({
     mutationFn: schedule.create,
@@ -248,14 +258,27 @@ export function SchedulePage() {
                   </FormField>
                   <FormField label="Send to">
                     <Select
-                      value={draft.destination_label}
-                      onChange={(e) =>
-                        setDraft({ ...draft, destination_label: e.target.value, destination_id: e.target.value === "All destinations" ? null : draft.destination_id })
-                      }
+                      value={draft.destination_id ?? ""}
+                      onChange={(e) => {
+                        // Empty value (the "All destinations" row) → null
+                        // dest_filter on the backend, which fans out to
+                        // every enabled destination. Otherwise the value
+                        // IS the destination ID; we also stash a
+                        // human-readable label for the UI's list view.
+                        const id = e.target.value || null;
+                        const label = id
+                          ? destList.find((d) => d.id === id)?.name ?? id
+                          : "All destinations";
+                        setDraft({ ...draft, destination_id: id, destination_label: label });
+                      }}
                     >
-                      <option>All destinations</option>
-                      <option>S3 only</option>
-                      <option>Local only</option>
+                      <option value="">All destinations</option>
+                      {destList.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name} · {d.kind.toUpperCase()}
+                          {d.enabled ? "" : " (disabled)"}
+                        </option>
+                      ))}
                     </Select>
                   </FormField>
                   <div style={{ padding: "12px 14px", border: "1px solid var(--as-line)", borderRadius: 8, background: "var(--as-bg-2)", marginBottom: 14 }}>
