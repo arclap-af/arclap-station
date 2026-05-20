@@ -897,8 +897,17 @@ polkit.addRule(function(action, subject) {
         "arclap-watchdog.timer",
         "arclap-watchdog.service",
         "arclap-usb3-disable.service",
+        "arclap-backup.timer",
+        "arclap-backup.service",
+        "arclap-integrity.timer",
+        "arclap-integrity.service",
+        "arclap-timelapse.timer",
+        "arclap-timelapse.service",
         "caddy.service",
         "avahi-daemon.service",
+        // v0.9 — needed for the Network tab DNS / NTP editors.
+        "systemd-resolved.service",
+        "systemd-timesyncd.service",
     ];
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         subject.user == "arclap") {
@@ -912,6 +921,30 @@ polkit.addRule(function(action, subject) {
          action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
          action.id == "org.freedesktop.login1.power-off" ||
          action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+        subject.user == "arclap") {
+        return polkit.Result.YES;
+    }
+    // v0.9 — NetworkManager actions for the cockpit's Network tab
+    // (ethernet IP config, WiFi connect/forget, profile modify).
+    if ((action.id == "org.freedesktop.NetworkManager.settings.modify.system" ||
+         action.id == "org.freedesktop.NetworkManager.settings.modify.own" ||
+         action.id == "org.freedesktop.NetworkManager.network-control" ||
+         action.id == "org.freedesktop.NetworkManager.enable-disable-network" ||
+         action.id == "org.freedesktop.NetworkManager.enable-disable-wifi") &&
+        subject.user == "arclap") {
+        return polkit.Result.YES;
+    }
+    // v0.9 — hostnamectl set-hostname for the cockpit's hostname editor.
+    if ((action.id == "org.freedesktop.hostname1.set-hostname" ||
+         action.id == "org.freedesktop.hostname1.set-static-hostname") &&
+        subject.user == "arclap") {
+        return polkit.Result.YES;
+    }
+    // v0.9 — timedatectl set-ntp/timezone (the timezone Select in
+    // Settings → General already exists; this lets it actually persist).
+    if ((action.id == "org.freedesktop.timedate1.set-ntp" ||
+         action.id == "org.freedesktop.timedate1.set-timezone" ||
+         action.id == "org.freedesktop.timedate1.set-time") &&
         subject.user == "arclap") {
         return polkit.Result.YES;
     }

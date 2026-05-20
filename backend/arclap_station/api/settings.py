@@ -451,6 +451,275 @@ async def wifi_forget(
     return {"ok": True}
 
 
+# ----- Editable network settings (v0.9) ----------------------------------
+#
+# Everything that operators historically had to SSH in for: ethernet IP
+# config (DHCP vs static), hostname, DNS, NTP. All gated by polkit so the
+# unprivileged `arclap` user can invoke nmcli/hostnamectl from the API
+# without sudo. See install.sh §10 for the polkit rule.
+
+
+class EthernetConfigRequest(BaseModel):
+    """Patch the eth0 (or named) connection's IPv4 config.
+
+    mode='dhcp' clears the static fields. mode='static' requires `address`
+    in CIDR form (e.g. '192.168.10.50/24') and at least a `gateway`.
+    `dns` is a comma-separated list of resolvers — empty string clears
+    overrides and falls back to whatever the gateway advertises.
+    """
+    interface: str = "eth0"
+    mode: str = Field(..., pattern=r"^(dhcp|static)$")
+    address: str | None = None  # CIDR, e.g. '192.168.10.50/24'
+    gateway: str | None = None
+    dns: str | None = None  # comma-separated
+
+
+@router.post("/network/ethernet")
+async def configure_ethernet(
+    payload: EthernetConfigRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Set eth0 to DHCP or static IP. Persistent across reboots via NM."""
+    import re  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    iface = payload.interface.strip()
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,15}", iface):
+        raise HTTPException(status_code=400, detail="invalid interface name")
+
+    # nmcli operates on a "connection profile" — for the wired interface
+    # this is usually called "Wired connection 1" or the profile name.
+    # We resolve it from `nmcli -t -f NAME,DEVICE connection show`.
+    try:
+        r = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    profile = None
+    for line in r.stdout.splitlines():
+        # NAME:DEVICE — handle escaped colons
+        parts = line.rsplit(":", 1)
+        if len(parts) == 2 and parts[1] == iface:
+            profile = parts[0].replace("\\:", ":")
+            break
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"no NetworkManager profile for {iface}")
+
+    cmd = ["nmcli", "connection", "modify", profile]
+    if payload.mode == "dhcp":
+        cmd += [
+            "ipv4.method", "auto",
+            "ipv4.addresses", "",
+            "ipv4.gateway", "",
+            "ipv4.dns", "",
+        ]
+    else:
+        if not payload.address or "/" not in payload.address:
+            raise HTTPException(status_code=400, detail="static mode needs address in CIDR form (e.g. 192.168.10.50/24)")
+        if not payload.gateway:
+            raise HTTPException(status_code=400, detail="static mode needs gateway")
+        cmd += [
+            "ipv4.method", "manual",
+            "ipv4.addresses", payload.address.strip(),
+            "ipv4.gateway", payload.gateway.strip(),
+        ]
+        if payload.dns:
+            # nmcli wants space-separated for `ipv4.dns`.
+            cmd += ["ipv4.dns", payload.dns.replace(",", " ").strip()]
+        else:
+            cmd += ["ipv4.dns", ""]
+
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if out.returncode != 0:
+        audit_emit("user", "network.ethernet_modify_failed", {
+            "interface": iface, "mode": payload.mode, "err": out.stderr[:200],
+        })
+        raise HTTPException(status_code=400, detail=(out.stderr or "modify failed").strip())
+
+    # Apply: bounce the connection so the new config takes effect.
+    # NB: if we mis-configured the static IP, the operator may lose
+    # access to the cockpit. The frontend should warn before submission.
+    try:
+        subprocess.run(["nmcli", "connection", "down", profile], capture_output=True, timeout=10)
+        subprocess.run(["nmcli", "connection", "up", profile], capture_output=True, timeout=15)
+    except subprocess.SubprocessError:
+        pass
+
+    audit_emit("user", "network.ethernet_modified", {
+        "interface": iface,
+        "mode": payload.mode,
+        "address": payload.address if payload.mode == "static" else None,
+        "gateway": payload.gateway if payload.mode == "static" else None,
+    })
+    return {"ok": True, "profile": profile, "mode": payload.mode}
+
+
+class HostnameRequest(BaseModel):
+    hostname: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
+
+
+@router.post("/network/hostname")
+async def set_hostname(
+    payload: HostnameRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Change the system hostname.
+
+    Uses `hostnamectl set-hostname` (polkit-gated for the arclap user).
+    Caddy + Avahi still serve the OLD hostname's TLS cert until a
+    service restart; the cockpit advises restarting both after a change.
+    The new hostname also propagates to mDNS as `<hostname>.local`.
+    """
+    import subprocess  # noqa: PLC0415
+
+    new_name = payload.hostname.strip()
+    try:
+        r = subprocess.run(
+            ["hostnamectl", "set-hostname", new_name],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if r.returncode != 0:
+        audit_emit("user", "network.hostname_change_failed", {"err": r.stderr[:200]})
+        raise HTTPException(status_code=400, detail=(r.stderr or "hostnamectl failed").strip())
+    audit_emit("user", "network.hostname_changed", {"new": new_name})
+    return {
+        "ok": True,
+        "hostname": new_name,
+        "note": "Caddy + Avahi serve the old TLS cert until you restart them from Settings → Diagnostics, or reboot.",
+    }
+
+
+class DnsRequest(BaseModel):
+    """System-wide DNS override.
+
+    servers='' clears the override (back to DHCP/fallback resolvers).
+    Otherwise: comma-separated IPs, e.g. '1.1.1.1,9.9.9.9'.
+    """
+    servers: str = ""
+
+
+@router.post("/network/dns")
+async def set_dns(
+    payload: DnsRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Set system-wide DNS resolvers via resolvectl (runtime + persistent).
+
+    Writes a drop-in to /etc/systemd/resolved.conf.d/60-cockpit.conf so
+    the change survives reboot, then `resolvectl flush-caches` so
+    in-flight lookups see the new servers immediately.
+    """
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    servers = [s.strip() for s in payload.servers.replace(";", ",").split(",") if s.strip()]
+    # Quick validation — every entry must look like an IPv4 or IPv6 literal.
+    import re  # noqa: PLC0415
+
+    pat = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$|^[0-9a-fA-F:]+$")
+    for s in servers:
+        if not pat.match(s):
+            raise HTTPException(status_code=400, detail=f"invalid server: {s!r}")
+
+    dropin_dir = _P("/etc/systemd/resolved.conf.d")
+    dropin = dropin_dir / "60-cockpit.conf"
+    try:
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        if servers:
+            body = "[Resolve]\nDNS=" + " ".join(servers) + "\n"
+            dropin.write_text(body)
+        else:
+            dropin.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write resolved drop-in: {exc}") from exc
+
+    try:
+        subprocess.run(["systemctl", "restart", "systemd-resolved"], capture_output=True, timeout=10)
+        subprocess.run(["resolvectl", "flush-caches"], capture_output=True, timeout=5)
+    except subprocess.SubprocessError:
+        pass
+
+    audit_emit("user", "network.dns_changed", {"servers": servers})
+    return {"ok": True, "servers": servers}
+
+
+class NtpRequest(BaseModel):
+    """Custom NTP servers. servers='' restores the default fallback ladder."""
+    servers: str = ""
+
+
+@router.post("/network/ntp")
+async def set_ntp(
+    payload: NtpRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Set custom NTP servers via timesyncd drop-in.
+
+    Empty servers list restores the 50-arclap.conf fallback ladder
+    (time.cloudflare.com → time.google.com → pool.ntp.org).
+    """
+    import subprocess  # noqa: PLC0415
+    from pathlib import Path as _P  # noqa: PLC0415
+
+    servers = [s.strip() for s in payload.servers.replace(";", ",").split(",") if s.strip()]
+
+    dropin_dir = _P("/etc/systemd/timesyncd.conf.d")
+    dropin = dropin_dir / "60-cockpit.conf"
+    try:
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        if servers:
+            body = "[Time]\nNTP=" + " ".join(servers) + "\n"
+            dropin.write_text(body)
+        else:
+            dropin.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write timesyncd drop-in: {exc}") from exc
+
+    try:
+        subprocess.run(["systemctl", "restart", "systemd-timesyncd"], capture_output=True, timeout=10)
+    except subprocess.SubprocessError:
+        pass
+
+    audit_emit("user", "network.ntp_changed", {"servers": servers})
+    return {"ok": True, "servers": servers}
+
+
+@router.get("/network/connections")
+async def list_connections(
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """List all NetworkManager connection profiles (saved networks)."""
+    import subprocess  # noqa: PLC0415
+
+    try:
+        r = subprocess.run(
+            ["nmcli", "-t", "-f", "NAME,UUID,TYPE,DEVICE,ACTIVE", "connection", "show"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return {"ok": False, "connections": []}
+    conns: list[dict[str, Any]] = []
+    for line in r.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 5:
+            continue
+        conns.append({
+            "name": parts[0],
+            "uuid": parts[1],
+            "type": parts[2],
+            "device": parts[3] if parts[3] else None,
+            "active": parts[4] == "yes",
+        })
+    return {"ok": True, "connections": conns}
+
+
 @router.get("/security")
 async def security_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
     chain = verify_chain()

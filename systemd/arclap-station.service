@@ -90,7 +90,7 @@ AmbientCapabilities=
 # Writable paths. /media/sdcard/photos is the only path under /media we
 # touch; listing /media/sdcard (parent) requires it to exist or systemd
 # refuses namespace setup. Use the actual write target instead.
-ReadWritePaths=/etc/arclap /var/lib/arclap /var/log/arclap /media/sdcard/photos
+ReadWritePaths=/etc/arclap /var/lib/arclap /var/log/arclap /media/sdcard/photos /etc/systemd/resolved.conf.d /etc/systemd/timesyncd.conf.d
 ReadOnlyPaths=-/opt/arclap-station
 
 # Standard streams → journald.
