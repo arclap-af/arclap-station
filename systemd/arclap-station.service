@@ -57,9 +57,23 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 PrivateDevices=false
-# Only /dev/bus/usb is portable across Pi 5 kernels — the older
-# char-usb_device class shorthand fails namespace setup on aarch64.
-DeviceAllow=/dev/bus/usb rw
+# USB device access via the cgroup v2 device controller.
+#
+# IMPORTANT: the kernel device-class shortcut `char-usb_device` IS what
+# systemd's BPF device controller actually accepts — a previous comment
+# here claimed it failed on aarch64, which was wrong.
+#
+# The path form (`DeviceAllow=/dev/bus/usb rw`) silently fails because
+# systemd stats the path to extract a major/minor, but /dev/bus/usb is
+# a DIRECTORY with no device numbers. systemd then doesn't add any
+# entry to the BPF allowlist, default-deny kicks in, and every
+# /dev/bus/usb/BUS/DEV open(O_RDWR) returns EPERM — even though the
+# device-node file permissions, plugdev group, and udev rules all
+# look correct. libgphoto2 surfaces this as `-7 I/O problem` from
+# Camera().init(), with no hint about the cgroup being responsible.
+# (Diagnosed via strace inside the hardened unit; bare arclap-user
+# invocations worked because they had no cgroup device restriction.)
+DeviceAllow=char-usb_device rw
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectKernelLogs=true
