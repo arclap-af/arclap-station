@@ -17,7 +17,7 @@ from arclap_station.audit import recent as recent_audit
 from arclap_station.audit import verify_chain
 from arclap_station.config import get_settings
 from arclap_station.station_config import StationConfig, get_station_store
-from arclap_station.telemetry.logs import follow_journal
+from arclap_station.telemetry.logs import follow_journal, recent_journal
 from arclap_station.telemetry.metrics import snapshot
 from arclap_station.terminal.pty import info as pty_info
 
@@ -1092,8 +1092,35 @@ async def audit_export(
     return bundle
 
 
+@router.get("/logs/recent")
+async def logs_recent(
+    unit: str | None = None,
+    level: str | None = None,
+    q: str | None = None,
+    limit: int = 200,
+    _: dict[str, Any] = Depends(require_session),
+) -> list[dict[str, Any]]:
+    """Recent journald lines, normalised + newest-first.
+
+    Returns the same `{ts, unit, level, message}` shape that the
+    /logs-ws WebSocket emits so the cockpit can mix history and live
+    streams into one sorted timeline. `unit`, `level` and `q` are
+    server-side filters that match the cockpit's three controls.
+    """
+    return await recent_journal(unit=unit, level=level, query=q, limit=limit)
+
+
 @router.websocket("/logs-ws")
-async def logs_ws(ws: WebSocket) -> None:
+async def logs_ws(
+    ws: WebSocket,
+    unit: str | None = None,
+) -> None:
+    """Stream journald lines to the cockpit Logs tab.
+
+    Honours an optional `unit` query param so the operator's filter
+    dropdown narrows what journalctl follows (cheaper + fewer events
+    over the wire than client-side filtering of everything).
+    """
     from arclap_station.api.deps import require_ws_session  # noqa: PLC0415
 
     sess = await require_ws_session(ws)
@@ -1102,7 +1129,7 @@ async def logs_ws(ws: WebSocket) -> None:
         return
     await ws.accept()
     try:
-        async for line in follow_journal():
+        async for line in follow_journal(unit=unit):
             await ws.send_text(json.dumps(line))
     except WebSocketDisconnect:
         return

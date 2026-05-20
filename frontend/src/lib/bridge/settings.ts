@@ -241,20 +241,26 @@ export const settings = {
     };
   },
   async logs(unit?: string, level?: string, query?: string): Promise<LogEntry[]> {
+    // Hit the journald-backed /logs/recent endpoint (NOT /audit/recent
+    // — that was the source of the schema mismatch: the cockpit
+    // expected `unit` and `level`, but audit records had `actor` and
+    // no `level`, so every filter dropdown was a no-op). Backend
+    // already returns newest-first, so the cockpit can render in array
+    // order.
     const qs = new URLSearchParams();
     if (unit && unit !== "all") qs.set("unit", unit);
     if (level && level !== "all") qs.set("level", level);
     if (query) qs.set("q", query);
     try {
       const raw = await apiFetch<unknown>(
-        `/settings/audit/recent${qs.toString() ? `?${qs}` : ""}`,
+        `/settings/logs/recent${qs.toString() ? `?${qs}` : ""}`,
       );
       if (!Array.isArray(raw)) return [];
       return raw.map((e: any) => ({
-        ts: str(e.ts ?? e.timestamp, ""),
-        unit: str(e.actor ?? e.unit, "system"),
+        ts: str(e.ts, ""),
+        unit: str(e.unit, "system"),
         level: (str(e.level, "info") as LogEntry["level"]),
-        message: str(e.event ?? e.message, ""),
+        message: str(e.message, ""),
       }));
     } catch {
       return [];
