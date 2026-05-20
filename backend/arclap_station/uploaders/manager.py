@@ -203,8 +203,28 @@ def _envelope_key() -> bytes:
         )
         return new_key
     except Exception as exc:  # noqa: BLE001 - keyring backends throw all sorts on dev
-        log.info("keyring unavailable (%s), falling back to file-based key", exc)
+        # Log this ONCE per process. The envelope key is fetched on
+        # every uploader operation; logging the fallback every time
+        # filled the journal with a multi-line warning per upload
+        # and made the Settings → Logs view useless. The fallback
+        # path is the documented behaviour on a Pi (libsecret
+        # daemons need a desktop session); once is enough.
+        global _LOGGED_KEYRING_FALLBACK
+        if not _LOGGED_KEYRING_FALLBACK:
+            log.info(
+                "keyring unavailable (%s); using file-based envelope key. "
+                "This is fine on a headless Pi — logged once per process.",
+                exc,
+            )
+            _LOGGED_KEYRING_FALLBACK = True
         return _file_envelope_key()
+
+
+# Sentinel — flipped True after the keyring fallback warning has been
+# emitted once per process, so we don't spam the journal with it on
+# every uploader call. Reset on process restart (i.e., per systemd
+# unit lifecycle).
+_LOGGED_KEYRING_FALLBACK = False
 
 
 def _file_envelope_key() -> bytes:

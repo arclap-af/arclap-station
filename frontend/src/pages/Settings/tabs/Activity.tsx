@@ -38,8 +38,26 @@ async function fetchActivity(limit: number): Promise<AuditEvent[]> {
 // timeline reads at a glance — captures green, uploads green,
 // failures red, system grey, user blue.
 function eventStyle(ev: string): { color: string; bg: string; icon: string } {
+  // Errors-first ordering — anything that's an operator-actionable
+  // problem must render RED regardless of which prefix it carries.
+  // `upload.failed_permanent`, `capture.refused_disk_full`,
+  // `capture.orphan` (photo captured with no destination), and
+  // `camera.service_restart` (libgphoto2 wedged, we self-killed)
+  // are all in this bucket.
+  const isError =
+    ev.includes("fail") ||
+    ev.includes("error") ||
+    ev.includes("refused") ||
+    ev === "capture.orphan" ||
+    ev === "camera.service_restart";
+  if (isError) {
+    return {
+      color: "var(--as-bad)",
+      bg: "color-mix(in srgb, var(--as-bad) 14%, transparent)",
+      icon: "⚠",
+    };
+  }
   if (ev.startsWith("capture")) return { color: "var(--as-accent-2)", bg: "color-mix(in srgb, var(--as-accent-2) 14%, transparent)", icon: "📸" };
-  if (ev.startsWith("upload.fail")) return { color: "var(--as-bad)", bg: "color-mix(in srgb, var(--as-bad) 14%, transparent)", icon: "⚠" };
   if (ev.startsWith("upload")) return { color: "var(--as-accent-2)", bg: "color-mix(in srgb, var(--as-accent-2) 14%, transparent)", icon: "↑" };
   if (ev.startsWith("destination")) return { color: "var(--as-ink)", bg: "var(--as-bg-2)", icon: "⤳" };
   if (ev.startsWith("schedule")) return { color: "var(--as-ink)", bg: "var(--as-bg-2)", icon: "⏱" };
@@ -51,10 +69,25 @@ function eventStyle(ev: string): { color: string; bg: string; icon: string } {
 
 const FILTERS: Array<{ id: string; label: string; match: (ev: string) => boolean }> = [
   { id: "all", label: "All", match: () => true },
-  { id: "captures", label: "Captures", match: (ev) => ev.startsWith("capture") },
-  { id: "uploads", label: "Uploads", match: (ev) => ev.startsWith("upload") },
+  { id: "captures", label: "Captures", match: (ev) => ev.startsWith("capture") && !ev.includes("orphan") && !ev.includes("refused") },
+  { id: "uploads", label: "Uploads", match: (ev) => ev.startsWith("upload") && !ev.includes("fail") },
   { id: "user", label: "User actions", match: (ev) => ev.startsWith("destination") || ev.startsWith("schedule") || ev.startsWith("camera") || ev.startsWith("auth") },
-  { id: "errors", label: "Errors", match: (ev) => ev.includes("fail") || ev.includes("error") || ev.includes("orphan") },
+  // Errors = anything that represents a problem the operator needs
+  // to know about: upload failures, capture refusals, capture orphans
+  // (photo captured but no destination accepted it), service restarts
+  // forced by stuck libgphoto2, audit-log inserts of "*.fail*".
+  // orphan_rescue is the SUCCESS case (we rescued the orphans) and
+  // must not show up here — it's a "Uploads" event.
+  {
+    id: "errors",
+    label: "Errors",
+    match: (ev) =>
+      (ev.includes("fail") ||
+        ev.includes("error") ||
+        ev.includes("refused") ||
+        ev === "capture.orphan" ||
+        ev === "camera.service_restart"),
+  },
 ];
 
 function fmtTs(iso: string): string {

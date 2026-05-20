@@ -285,8 +285,17 @@ create_user() {
     ok "Created user '${ARCLAP_USER}'"
   fi
 
-  # Group membership: plugdev (USB), video (V4L), dialout (serial cameras).
-  for g in plugdev video dialout; do
+  # Group membership:
+  #   plugdev         — USB device-node access (DSLR over PTP)
+  #   video           — V4L (UVC webcam fallback)
+  #   dialout         — serial cameras (rare, kept for completeness)
+  #   systemd-journal — read journalctl as the service user. Required
+  #                     for the cockpit's Settings → Logs tab; without
+  #                     it `journalctl -u arclap-station` from the
+  #                     service-owned user returns "No journal files
+  #                     were opened due to insufficient permissions"
+  #                     and the cockpit shows "0 lines".
+  for g in plugdev video dialout systemd-journal; do
     if getent group "${g}" >/dev/null 2>&1; then
       if ! id -nG "${ARCLAP_USER}" | tr ' ' '\n' | grep -qx "${g}"; then
         usermod -a -G "${g}" "${ARCLAP_USER}"
