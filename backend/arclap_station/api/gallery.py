@@ -21,12 +21,33 @@ async def list_photos(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     date: str | None = Query(default=None),
+    filter: str | None = Query(default=None, alias="filter"),
+    q: str | None = Query(default=None),
     _: dict[str, Any] = Depends(require_session),
 ) -> dict[str, Any]:
+    """List photos with optional filter + free-text search.
+
+    `filter` accepts: all | uploaded | pending | starred. The cockpit's
+    pill bar binds each pill to one of these values; before this the
+    backend silently ignored the parameter and every pill returned
+    the same data, so the operator could never narrow down to just
+    the failed uploads (which is the only useful pill when a
+    destination is misbehaving).
+
+    `q` is a case-insensitive substring match against the photo's
+    path / filename. Mirrors the search box in the cockpit toolbar.
+    """
     store = get_store()
-    items = store.list(limit=limit, offset=offset, date=date)
+    items = store.list(
+        limit=limit,
+        offset=offset,
+        date=date,
+        upload_filter=filter,
+        query=q,
+    )
+    total = store.count(upload_filter=filter, query=q)
     return {
-        "total": store.count(),
+        "total": total,
         "items": [p.to_dict() for p in items],
         "limit": limit,
         "offset": offset,

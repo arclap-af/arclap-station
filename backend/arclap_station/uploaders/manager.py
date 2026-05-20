@@ -1,4 +1,4 @@
-"""Destination CRUD + secrets-at-rest envelope.
+"""Destination CRUD + secrets-at-rest envelope + orphan-rescue.
 
 Per-destination config is stored encrypted-at-rest via the system keyring
 (libsecret on Linux, Windows Credential Manager on dev). If keyring is
@@ -10,6 +10,7 @@ of the Pi is what actually protects the secrets at rest.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import json
 import logging
 import os
@@ -17,6 +18,11 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any, cast
+
+
+def datetime_now_iso() -> str:
+    """ISO-8601 UTC second-precision — matches what SQLite's datetime('now') emits."""
+    return _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 from arclap_station.config import get_settings
 from arclap_station.db import Database, get_db
@@ -295,7 +301,70 @@ class DestinationManager:
                 """,
                 (dest_id, name, type_id, encrypt_config(config), int(enabled)),
             )
+        # Orphan rescue: every photo captured BEFORE any destination
+        # existed was registered with upload_state='pending' but never
+        # got a queue entry (nothing to enqueue against). Without this
+        # backfill, those photos sit pending forever — operator sees
+        # "Pending · 4" in the gallery, hits Refresh, nothing changes.
+        # Enqueue them now against this newly-created destination (if
+        # enabled). Schedules created later can also pick them up
+        # via their dest_filter; this is the catch-all path for
+        # photos with no destination at capture time.
+        if enabled:
+            self._enqueue_pending_orphans(dest_id)
         return self.get(dest_id)  # type: ignore[return-value]
+
+    def _enqueue_pending_orphans(self, dest_id: str) -> None:
+        """Queue every pending photo that has no queue entry yet against this dest.
+
+        Uses the canonical UploadQueue.enqueue() rather than raw SQL so
+        items get the correct state ('pending', not 'queued') that the
+        worker's `_claim()` loop actually picks up. An earlier version
+        inserted rows directly with state='queued' which the worker
+        silently ignored.
+        """
+        try:
+            with self._db.connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT p.id
+                    FROM photos p
+                    WHERE p.upload_state IN ('pending', 'failed')
+                      AND NOT EXISTS (
+                        SELECT 1 FROM upload_queue q WHERE q.photo_id = p.id
+                      )
+                    """
+                ).fetchall()
+            photo_ids = [int(r[0]) for r in rows]
+            if not photo_ids:
+                return
+            # Lazy import to avoid the manager <-> queue cycle.
+            from arclap_station.uploaders.queue import get_queue  # noqa: PLC0415
+            queue = get_queue()
+            for pid in photo_ids:
+                queue.enqueue(pid, [dest_id])
+            log.info(
+                "orphan-rescue: enqueued %d previously-pending photo(s) against dest %s",
+                len(photo_ids),
+                dest_id,
+            )
+            # Audit so the operator sees a clear breadcrumb in the
+            # Activity feed: "system  upload.orphan_rescue  enqueued N photos".
+            try:
+                from arclap_station.audit import emit as _audit  # noqa: PLC0415
+                _audit(
+                    "system",
+                    "upload.orphan_rescue",
+                    {
+                        "dest_id": dest_id,
+                        "photo_count": len(photo_ids),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:  # noqa: BLE001
+            # Never block destination creation on a rescue failure.
+            log.warning("orphan rescue failed: %s", exc)
 
     def update(self, dest_id: str, *, name: str | None = None,
                config: dict[str, Any] | None = None,
