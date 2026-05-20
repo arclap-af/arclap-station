@@ -296,11 +296,37 @@ async def preview_ws(ws: WebSocket, fps: int = Query(default=10, ge=2, le=15)) -
 
 @router.post("/reconnect")
 async def reconnect(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
-    """Close the held PTP session and force a fresh init on next call."""
+    """Close the held PTP session and force a fresh init on next call.
+
+    Also clears the cross-process health beacon's recent-failure record so
+    the next ``_ensure()`` invocation uses the full 3-attempt init ladder
+    (1 s / 3 s / 10 s) instead of fail-fast. Without that clear, an operator
+    who's just plugged the camera in would get a single instant-fail attempt
+    because the beacon still records the unplugged state.
+    """
     try:
         get_adapter().close()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    # Wipe the beacon's recent-failure marker so the next ensure() does the
+    # full retry ladder. We DON'T mark it ok — detect() will do that if it
+    # actually succeeds. Best-effort: never fail the request on a beacon error.
+    try:
+        import json as _json  # noqa: PLC0415
+        from arclap_station.camera import health as _ch  # noqa: PLC0415
+
+        path = _ch._path()  # noqa: SLF001
+        try:
+            payload = _json.loads(path.read_text())
+        except (OSError, _json.JSONDecodeError):
+            payload = {}
+        for k in ("last_error_at", "last_error"):
+            payload.pop(k, None)
+        path.write_text(_json.dumps(payload, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+
     audit_emit("user", "camera.reconnect", {})
     # Trigger an immediate detect so the cockpit gets fresh state.
     info = get_adapter().detect()
@@ -381,5 +407,41 @@ async def usb_reset(_: dict[str, Any] = Depends(require_session)) -> dict[str, A
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY, detail=f"sysfs write failed: {exc}"
             ) from exc
-    audit_emit("user", "camera.usb_reset", {"devices": toggled})
-    return {"ok": bool(toggled), "devices": toggled}
+    # If NO camera was found on the USB bus we still want to do something
+    # useful — e.g. the operator just plugged in a camera but the kernel
+    # hasn't re-enumerated yet. Trigger a re-scan + reload udev rules.
+    rescanned = False
+    if not toggled:
+        import subprocess  # noqa: PLC0415
+
+        try:
+            subprocess.run(["udevadm", "trigger", "--subsystem-match=usb"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["udevadm", "settle", "--timeout=3"],
+                           capture_output=True, timeout=5)
+            rescanned = True
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
+
+    # Also clear the camera health beacon's recent-failure record so the
+    # adapter's fail-fast window doesn't short-circuit the very next
+    # detect() call.
+    try:
+        import json as _json  # noqa: PLC0415
+        from arclap_station.camera import health as _ch  # noqa: PLC0415
+
+        bpath = _ch._path()  # noqa: SLF001
+        try:
+            payload = _json.loads(bpath.read_text())
+        except (OSError, _json.JSONDecodeError):
+            payload = {}
+        for k in ("last_error_at", "last_error"):
+            payload.pop(k, None)
+        bpath.write_text(_json.dumps(payload, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+
+    audit_emit("user", "camera.usb_reset", {
+        "devices": toggled, "rescanned": rescanned,
+    })
+    return {"ok": bool(toggled) or rescanned, "devices": toggled, "rescanned": rescanned}
