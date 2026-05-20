@@ -340,15 +340,40 @@ export function SchedulePage() {
                       After upload
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0" }}>
-                      <div>
+                      <div style={{ flex: 1, paddingRight: 16 }}>
                         <div style={{ fontSize: 13 }}>Keep local copy</div>
-                        <div style={{ fontSize: 11, color: "var(--as-ink-3)", marginTop: 2 }}>
+                        <div style={{ fontSize: 11, color: "var(--as-ink-3)", marginTop: 2, lineHeight: 1.5 }}>
                           {draft.keep_local
-                            ? "Photo stays on the SD card after upload. Retention policy reclaims space later."
-                            : "Photo is deleted from the SD card once every destination has uploaded successfully."}
+                            ? "Photo stays on the SD card after upload. Safe default — both copies exist."
+                            : "Photo is deleted from the SD card after EVERY destination uploads successfully."}
                         </div>
                       </div>
                       <Toggle on={draft.keep_local} onChange={(v) => setDraft({ ...draft, keep_local: v })} />
+                    </div>
+                    {/* Offline-fallback explainer. Every capture lands
+                        on the SD card BEFORE the upload attempt — there
+                        is no "no internet → no photo" failure mode.
+                        Surfacing this in the form means an operator
+                        with a flaky 4G link can reason about what
+                        happens to a photo when the link is down. */}
+                    <div
+                      style={{
+                        marginTop: 10,
+                        padding: "8px 10px",
+                        borderRadius: 6,
+                        background: "color-mix(in srgb, var(--as-accent-2) 8%, transparent)",
+                        fontSize: 11,
+                        color: "var(--as-ink-2)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <strong style={{ color: "var(--as-accent-2)" }}>If the internet / FTP is down:</strong>{" "}
+                      every photo is written to the SD card FIRST, then
+                      queued for upload. If a destination is
+                      unreachable, the photo stays in the queue and
+                      retries with exponential backoff until success.
+                      The local copy is{" "}
+                      {draft.keep_local ? "kept either way" : "only deleted once every destination has acknowledged the upload"}.
                     </div>
                   </div>
                   <div style={{ padding: "10px 14px", background: "var(--as-accent-soft)", borderRadius: 8, fontSize: 12, color: "var(--as-accent-2)" }}>

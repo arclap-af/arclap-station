@@ -72,9 +72,40 @@ export function Gallery() {
     });
   };
   const clearSel = () => setSelected(new Set());
+
+  // True when every currently-visible photo is in the selection. Used
+  // to flip the Select-all button into a Deselect-all (per the
+  // standard tri-state checkbox UX).
+  const allVisibleSelected =
+    photos.length > 0 && photos.every((p) => selected.has(p.id));
+
+  const selectAllVisible = () => {
+    if (allVisibleSelected) {
+      // Re-clicking when everything is already selected toggles off.
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(photos.map((p) => p.id)));
+    }
+  };
+
   const deleteSelected = () => {
-    if (!window.confirm(`Delete ${selected.size} photo(s) from SD card? Remote copies are preserved.`)) return;
+    if (!window.confirm(`Delete ${selected.size} photo(s) from the SD card? Remote copies on configured destinations are preserved.`)) return;
     Array.from(selected).forEach((id) => removeMut.mutate(id));
+    clearSel();
+  };
+
+  const deleteAll = () => {
+    // Two-step confirm — first the count, then the literal word so a
+    // mis-click can't wipe the gallery. Mirrors how the System tab's
+    // factory-reset is gated.
+    const n = photos.length;
+    if (n === 0) return;
+    if (!window.confirm(`Delete ALL ${n} photo(s) from the SD card?\n\nRemote copies are preserved. This cannot be undone locally.`)) return;
+    const typed = window.prompt(`Type DELETE to confirm removing ${n} photos.`);
+    if (typed !== "DELETE") return;
+    // Fire deletes in order; the mutation invalidates the gallery
+    // query on every success so the count visibly counts down.
+    photos.forEach((p) => removeMut.mutate(p.id));
     clearSel();
   };
 
@@ -161,16 +192,46 @@ export function Gallery() {
               </button>
             ))}
           </div>
+          {/* Bulk-selection toolbar — always visible (not hidden behind
+              a selection) so the operator knows the option exists. */}
+          <Button
+            style={{ padding: "6px 10px", fontSize: 11.5 }}
+            onClick={selectAllVisible}
+            disabled={photos.length === 0}
+            title={allVisibleSelected ? "Deselect every visible photo" : "Select every visible photo"}
+          >
+            {allVisibleSelected ? `Deselect all (${photos.length})` : `Select all (${photos.length})`}
+          </Button>
+
           {selected.size > 0 && (
             <>
-              <div style={{ fontSize: 12, color: "var(--as-ink-2)", fontWeight: 600 }}>{selected.size} selected</div>
-              <Button style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--as-bad)" }} onClick={deleteSelected}>
-                Delete
+              <div style={{ fontSize: 12, color: "var(--as-ink-2)", fontWeight: 600 }}>
+                {selected.size} selected
+              </div>
+              <Button
+                style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--as-bad)", fontWeight: 600 }}
+                onClick={deleteSelected}
+              >
+                Delete {selected.size}
               </Button>
               <Button style={{ padding: "6px 10px", fontSize: 11.5 }} onClick={clearSel}>
                 Clear
               </Button>
             </>
+          )}
+
+          {/* "Delete all" stays separate from the selection-based bulk
+              delete so a click here is unambiguously "everything",
+              not the dynamic N from the current selection. Two-step
+              confirm (count + DELETE keyword) inside deleteAll(). */}
+          {photos.length > 0 && selected.size === 0 && (
+            <Button
+              style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--as-bad)", marginLeft: "auto" }}
+              onClick={deleteAll}
+              title="Remove every photo from the SD card. Remote copies are preserved."
+            >
+              Delete all ({photos.length})
+            </Button>
           )}
         </div>
 
