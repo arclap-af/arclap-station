@@ -41,6 +41,10 @@ frontend/dist/
 .DS_Store
 Thumbs.db
 
+# Claude Code local preview config — machine-specific dev-server paths
+# (launch.json points at this workstation's checkout). Never commit.
+.claude/
+
 # Local-only artefacts
 *.log
 *.db-journal
