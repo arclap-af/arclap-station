@@ -70,15 +70,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={it.id}
             className={`as-toast as-toast-${it.level}`}
             style={{
-              background: "var(--as-fill-1)",
-              border: "1px solid var(--as-line)",
+              background: "var(--as-surface-2)",
+              border: "1px solid var(--as-line-2)",
               borderLeft: `3px solid var(--as-${it.level === "info" ? "ink-3" : it.level})`,
-              borderRadius: 6,
+              borderRadius: 8,
               padding: "10px 14px",
               minWidth: 220,
               maxWidth: 380,
               fontSize: 13,
-              boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+              boxShadow: "var(--as-shadow-2)",
               pointerEvents: "auto",
               animation: "as-toast-in 180ms ease-out",
             }}

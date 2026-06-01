@@ -11,7 +11,7 @@ export function FTPForm({ config, onChange }: Props) {
       <FormField label="Host">
         <TextInput className="mono" value={String(config.host ?? "")} onChange={(e) => onChange("host", e.target.value)} />
       </FormField>
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 10 }}>
+      <div className="as-form-row-3">
         <FormField label="User">
           <TextInput className="mono" value={String(config.user ?? "")} onChange={(e) => onChange("user", e.target.value)} />
         </FormField>

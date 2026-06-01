@@ -268,10 +268,7 @@ export function Terminal() {
           </div>
         </div>
 
-        <div
-          className="as-grid-2"
-          style={{ alignItems: "start", gap: 14, gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)" }}
-        >
+        <div className="as-term-2col">
           {/* Terminal */}
           <div className="as-card" style={{ padding: 0, overflow: "hidden" }}>
             <div style={{
@@ -371,19 +368,10 @@ export function Terminal() {
 function Tab({ id, label, active, onClick }: { id: string; label: string; active: boolean; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={id}
-      style={{
-        padding: "8px 12px",
-        background: active ? "var(--as-fill-1)" : "transparent",
-        border: "none",
-        borderBottom: active ? "2px solid var(--as-accent)" : "2px solid transparent",
-        color: active ? "var(--as-ink-1)" : "var(--as-ink-3)",
-        fontSize: 11.5,
-        fontWeight: active ? 700 : 500,
-        cursor: "pointer",
-        whiteSpace: "nowrap",
-      }}
+      className={`as-term-tab${active ? " active" : ""}`}
     >
       {label}
     </button>
@@ -394,19 +382,10 @@ function CmdRow({ c, onRun, disabled }: { c: Cmd; onRun: (cmd: string) => void; 
   const [copied, setCopied] = useState(false);
   return (
     <div
-      style={{
-        padding: "7px 10px",
-        marginBottom: 4,
-        border: "1px solid var(--as-line)",
-        borderRadius: 5,
-        background: "var(--as-fill-1)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        position: "relative",
-      }}
+      className={`as-cmd-row${disabled ? " disabled" : ""}`}
       onClick={() => !disabled && onRun(c.cmd)}
     >
-      <div className="mono" style={{ fontSize: 11.5, color: "var(--as-ink-1)", marginBottom: 2, wordBreak: "break-word" }}>
+      <div className="mono" style={{ fontSize: 11.5, color: "var(--as-ink)", marginBottom: 2, wordBreak: "break-word" }}>
         {c.cmd}
       </div>
       <div style={{ fontSize: 10.5, color: "var(--as-ink-3)" }}>{c.desc}</div>

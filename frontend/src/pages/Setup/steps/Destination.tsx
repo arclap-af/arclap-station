@@ -21,7 +21,7 @@ export function Destination({ state, update }: Props) {
   return (
     <>
       <FormField label="Destination type">
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 4 }}>
+        <div className="as-form-row-2" style={{ marginTop: 4 }}>
           {TYPES.map(([id, name, ic]) => {
             const active = state.destType === id;
             return (

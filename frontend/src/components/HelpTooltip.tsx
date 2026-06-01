@@ -51,14 +51,14 @@ export function HelpTooltip({
             minWidth: 220,
             maxWidth: 320,
             padding: "8px 10px",
-            background: "var(--as-fill-1)",
-            color: "var(--as-ink-1)",
-            border: "1px solid var(--as-line)",
-            borderRadius: 6,
+            background: "var(--as-surface-2)",
+            color: "var(--as-ink)",
+            border: "1px solid var(--as-line-2)",
+            borderRadius: 8,
             fontSize: 12,
             lineHeight: 1.45,
             zIndex: 5000,
-            boxShadow: "0 6px 18px rgba(0,0,0,0.2)",
+            boxShadow: "var(--as-shadow-2)",
           }}
         >
           {text}

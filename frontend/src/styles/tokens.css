@@ -535,6 +535,99 @@ button > .as-card:hover,
   .as-cam-2col { grid-template-columns: 1fr; }
 }
 
+/* ───── Terminal page: terminal (left, wider) + command palette ─────
+   Same responsive-trap fix as the camera page — owns its columns in
+   CSS so the media query can collapse it instead of an inline style
+   pinning it 2-up on phones. */
+.as-term-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .as-term-2col { grid-template-columns: 1fr; }
+}
+
+/* ───── Gallery lightbox: photo + metadata sidebar ─────
+   Sidebar drops below the image on narrow screens instead of being
+   squeezed to an unreadable sliver next to it. */
+.as-lightbox {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+@media (max-width: 720px) {
+  .as-lightbox {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    max-height: 92vh;
+    overflow: auto;
+  }
+}
+
+/* ───── Responsive form rows ─────
+   Multi-field rows in destination / setup / schedule forms. Collapse
+   to a single column on phones so a 3-up "User · Port · Mode" row
+   doesn't shrink each input to an unusable sliver. */
+.as-form-row-2,
+.as-form-row-3,
+.as-form-row-2-1 {
+  display: grid;
+  gap: 10px;
+}
+.as-form-row-2   { grid-template-columns: 1fr 1fr; }
+.as-form-row-2-1 { grid-template-columns: 2fr 1fr; }
+.as-form-row-3   { grid-template-columns: 2fr 1fr 1fr; }
+@media (max-width: 560px) {
+  .as-form-row-2,
+  .as-form-row-2-1,
+  .as-form-row-3 { grid-template-columns: 1fr; }
+}
+
+/* ───── Terminal command palette ─────
+   Category tabs + clickable command rows. Previously styled with the
+   undefined --as-fill-1 / --as-ink-1 tokens, which rendered the active
+   tab transparent and command rows with no surface. Real tokens +
+   hover/active feedback. */
+.as-term-tab {
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--as-ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms var(--as-ease), background 120ms var(--as-ease),
+    border-color 120ms var(--as-ease);
+}
+.as-term-tab:hover:not(.active) { color: var(--as-ink); background: var(--as-surface); }
+.as-term-tab.active {
+  background: var(--as-accent-soft);
+  border-bottom-color: var(--as-accent);
+  color: var(--as-accent-2);
+  font-weight: 700;
+}
+.as-cmd-row {
+  padding: 7px 10px;
+  margin-bottom: 4px;
+  border: 1px solid var(--as-line);
+  border-radius: var(--as-r-sm);
+  background: var(--as-bg-2);
+  cursor: pointer;
+  position: relative;
+  transition: background 120ms var(--as-ease), border-color 120ms var(--as-ease),
+    transform 80ms var(--as-ease);
+}
+.as-cmd-row:hover {
+  background: var(--as-surface-2);
+  border-color: var(--as-line-2);
+}
+.as-cmd-row:active { transform: scale(0.995); }
+.as-cmd-row.disabled { cursor: not-allowed; opacity: 0.5; }
+.as-cmd-row.disabled:hover { background: var(--as-bg-2); border-color: var(--as-line); }
+
 /* ───── Camera quick-settings chips ───── */
 .as-chip {
   padding: 5px 11px;
@@ -597,6 +690,46 @@ button > .as-card:hover,
   font-family: var(--as-mono);
   display: flex;
   justify-content: space-between;
+}
+
+/* ───── Setup wizard ─────
+   Shares the login's signature: deep radial accent glow + faint
+   dot-grid so the first-run experience feels like one designed
+   surface, not a bare form. */
+.as-setup-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse 70% 40% at 50% -5%, rgba(16, 185, 129, 0.14) 0%, transparent 60%),
+    radial-gradient(ellipse at top, #15202b 0%, #0a0e14 60%);
+}
+.as-setup-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(ellipse at center, black 25%, transparent 78%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 25%, transparent 78%);
+}
+.as-setup-seg {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--as-surface-2);
+  transition: background 240ms var(--as-ease), box-shadow 240ms var(--as-ease);
+}
+.as-setup-seg.done { background: var(--as-accent); }
+.as-setup-seg.current {
+  background: var(--as-accent);
+  box-shadow: 0 0 10px var(--as-accent-glow);
+}
+.as-setup-step {
+  animation: as-rise 260ms var(--as-ease) both;
 }
 
 /* ───── Setup badge ───── */

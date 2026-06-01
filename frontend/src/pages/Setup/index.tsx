@@ -180,8 +180,8 @@ export function SetupWizard() {
   };
 
   return (
-    <div style={{ minHeight: "100vh", background: "radial-gradient(ellipse at top, #15202b 0%, #0a0e14 60%)", display: "flex", flexDirection: "column" }}>
-      <div style={{ padding: "18px 32px", borderBottom: "1px solid var(--as-line)", background: "rgba(10,14,20,0.7)" }}>
+    <div className="as-setup-shell">
+      <div style={{ padding: "18px 32px", borderBottom: "1px solid var(--as-line)", background: "rgba(10,14,20,0.7)", backdropFilter: "blur(6px)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
           <div className="as-mark" style={{ width: 32, height: 32, fontSize: 15 }}>A</div>
           <div style={{ flex: 1 }}>
@@ -197,20 +197,14 @@ export function SetupWizard() {
           {SETUP_STEPS.map((s, i) => (
             <div
               key={s.id}
-              style={{
-                flex: 1,
-                height: 4,
-                borderRadius: 2,
-                background: i <= stepIndex ? "var(--as-accent)" : "var(--as-surface-2)",
-                transition: "background 200ms",
-              }}
+              className={`as-setup-seg${i < stepIndex ? " done" : i === stepIndex ? " current" : ""}`}
             />
           ))}
         </div>
       </div>
 
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "32px 24px" }}>
-        <div style={{ width: "100%", maxWidth: 560 }}>
+        <div key={cur.id} className="as-setup-step" style={{ width: "100%", maxWidth: 560 }}>
           <div style={{ textAlign: "center", marginBottom: 28 }}>
             <h1 style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.02em", margin: "0 0 8px" }}>{cur.title}</h1>
             <div style={{ fontSize: 14, color: "var(--as-ink-3)" }}>{cur.sub}</div>

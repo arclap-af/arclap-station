@@ -273,7 +273,7 @@ export function SchedulePage() {
                     </div>
                   </FormField>
                   <FormField label="Active hours">
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div className="as-form-row-2">
                       <TextInput type="time" value={draft.from_time} onChange={(e) => setDraft({ ...draft, from_time: e.target.value })} />
                       <TextInput type="time" value={draft.to_time} onChange={(e) => setDraft({ ...draft, to_time: e.target.value })} />
                     </div>

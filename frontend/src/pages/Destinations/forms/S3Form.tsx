@@ -21,7 +21,7 @@ export function S3Form({ config, onChange }: Props) {
       <FormField label="Path template" hint="{yyyy} {mm} {dd} {HH} {ts}">
         <TextInput className="mono" value={String(config.prefix ?? "")} onChange={(e) => onChange("prefix", e.target.value)} />
       </FormField>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      <div className="as-form-row-2">
         <FormField label="Access key">
           <TextInput className="mono" placeholder="AKIA…" value={String(config.access_key ?? "")} onChange={(e) => onChange("access_key", e.target.value)} />
         </FormField>

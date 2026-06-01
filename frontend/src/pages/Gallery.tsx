@@ -356,13 +356,11 @@ export function Gallery() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="as-card"
+              className="as-card as-lightbox"
               style={{
                 maxWidth: 1100,
                 width: "100%",
                 maxHeight: "92vh",
-                display: "grid",
-                gridTemplateColumns: "1fr 320px",
                 padding: 0,
                 overflow: "hidden",
               }}

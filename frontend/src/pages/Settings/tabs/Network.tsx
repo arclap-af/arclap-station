@@ -210,9 +210,9 @@ function WifiCard({
                 onClick={() => setSelected(n.ssid)}
                 style={{
                   padding: "6px 10px",
-                  background: selected === n.ssid ? "var(--as-fill-2)" : "transparent",
-                  border: "1px solid var(--as-line)",
-                  borderRadius: 4,
+                  background: selected === n.ssid ? "var(--as-accent-soft)" : "transparent",
+                  border: `1px solid ${selected === n.ssid ? "var(--as-accent)" : "var(--as-line)"}`,
+                  borderRadius: 6,
                   display: "flex",
                   justifyContent: "space-between",
                   cursor: "pointer",

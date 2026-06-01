@@ -51,7 +51,7 @@ export function Schedule({ state, update }: Props) {
           })}
         </div>
       </FormField>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div className="as-form-row-2">
         <FormField label="From">
           <TextInput type="time" value={state.schedFrom} onChange={(e) => update("schedFrom", e.target.value)} />
         </FormField>
