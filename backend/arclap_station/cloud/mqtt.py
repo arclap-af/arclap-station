@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 import time
 from datetime import UTC, datetime
@@ -118,6 +119,10 @@ class MqttPublisher:
                 client.on_connect = self._on_connect
                 client.on_disconnect = self._on_disconnect
                 # AWS IoT Core endpoints listen on 8883 for mTLS.
+                # Bound the connect with a quick TCP reachability probe
+                # so a black-holed endpoint can't wedge this publisher
+                # thread indefinitely between backoffs.
+                socket.create_connection((broker, 8883), timeout=15).close()
                 client.connect(broker, 8883, keepalive=60)
                 self._client = client
                 client.loop_start()

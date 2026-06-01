@@ -114,8 +114,11 @@ export function Destinations() {
   // the form IS what gets sent.
   const DEFAULT_CONFIG: Record<DestinationKind, Record<string, unknown>> = {
     s3: {
-      endpoint: "https://s3.amazonaws.com",
-      region: "us-east-1",
+      endpoint: "https://s3.eu-central-1.amazonaws.com",
+      // eu-central-1 is the project's primary region (Swiss/EU data
+      // residency, CLAUDE.md). The form now exposes Region so this is
+      // just the starting value, not a hard pin.
+      region: "eu-central-1",
       bucket: "",
       access_key: "",
       secret_key: "",
@@ -128,6 +131,7 @@ export function Destinations() {
       auth: "password",
       password: "",
       private_key: "",
+      private_key_passphrase: "",
       remote_path: "/photos/{yyyy}/{mm}/{dd}/",
     },
     ftp: {
@@ -165,7 +169,6 @@ export function Destinations() {
       topic: "arclap/{station}/photos",
       client_id: "",
     },
-    arc: {},
   };
 
   const startNew = (kind: DestinationKind) => {

@@ -10,6 +10,51 @@ import { gallery, type Photo } from "../lib/bridge/gallery";
 
 type Filter = "all" | "uploaded" | "pending" | "starred";
 
+/**
+ * Thumbnail that degrades gracefully when the source file is gone.
+ *
+ * With a schedule's "keep local copy" turned off, the SD-card file is
+ * deleted once every destination has the photo — so its thumbnail 410s.
+ * Rather than show a broken-image icon, render a tidy placeholder:
+ * "Uploaded · cleared" when the photo did upload (`cleared`), or
+ * "Preview unavailable" otherwise.
+ */
+function Thumb({ src, alt, cleared }: { src: string; alt: string; cleared: boolean }) {
+  const [errored, setErrored] = useState(false);
+  if (errored) {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "grid",
+          placeItems: "center",
+          background: "#0f1a26",
+          color: "var(--as-ink-3)",
+          textAlign: "center",
+          padding: 8,
+        }}
+      >
+        <div>
+          <Icon d={cleared ? I.upload : I.gallery} size={20} />
+          <div style={{ fontSize: 9.5, marginTop: 4, lineHeight: 1.3 }}>
+            {cleared ? "Uploaded · cleared from device" : "Preview unavailable"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <img
+      loading="lazy"
+      src={src}
+      alt={alt}
+      onError={() => setErrored(true)}
+      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+    />
+  );
+}
+
 export function Gallery() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<Filter>("all");
@@ -262,12 +307,7 @@ export function Gallery() {
                     }}
                     onClick={() => setOpen(p)}
                   >
-                    <img
-                      loading="lazy"
-                      src={p.thumb_url}
-                      alt={p.filename}
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
+                    <Thumb src={p.thumb_url} alt={p.filename} cleared={!!up} />
                     <div style={{ position: "absolute", top: 6, left: 6, right: 6, display: "flex", justifyContent: "space-between" }}>
                       <input
                         type="checkbox"

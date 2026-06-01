@@ -69,6 +69,20 @@ def fake_mqtt(monkeypatch: pytest.MonkeyPatch) -> type[_FakeClient]:
     monkeypatch.setattr("arclap_station.uploaders.mqtt.mqtt.Client", _FakeClient)
     monkeypatch.setattr("arclap_station.uploaders.mqtt.mqtt.CallbackAPIVersion", _NS)
     monkeypatch.setattr("arclap_station.uploaders.mqtt.mqtt.MQTT_ERR_SUCCESS", 0)
+
+    # The uploader now does a bounded TCP reachability probe before
+    # connecting (so a black-holed broker fails fast instead of wedging
+    # a worker). Stub it for these publish-logic tests, which never
+    # touch a real broker. (test_mqtt_connect_timeout.py covers the
+    # probe's failure path explicitly.)
+    class _FakeSock:
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "arclap_station.uploaders.mqtt.socket.create_connection",
+        lambda *a, **k: _FakeSock(),
+    )
     return _FakeClient
 
 

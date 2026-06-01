@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import socket
 import threading
 import time
 from pathlib import Path
@@ -98,6 +99,17 @@ class MQTTUploader:
 
         client.on_publish = on_publish
         try:
+            # paho's connect() blocks on the OS default socket timeout
+            # (can be minutes) against a black-holed broker, which would
+            # wedge an upload-worker thread. Bound it with a quick TCP
+            # reachability probe first so we fail fast instead.
+            try:
+                socket.create_connection((self.host, self.port), timeout=self.timeout).close()
+            except OSError as exc:
+                raise UploadError(
+                    f"mqtt broker unreachable at {self.host}:{self.port} "
+                    f"within {self.timeout:.0f}s: {exc}"
+                ) from exc
             client.connect(self.host, self.port, keepalive=int(self.timeout) + 5)
             client.loop_start()
             info = client.publish(topic, payload, qos=self.qos)

@@ -177,6 +177,26 @@ class PhotoStore:
             ).fetchone()
         return int(row[0]) if row else 0
 
+    def latest_captured_at(self) -> datetime | None:
+        """Timestamp of the most recent capture, or None if no photos yet.
+
+        Used by the self-test as the *truth signal* for camera health:
+        detection can read green while real captures fail, so health is
+        cross-checked against whether photos are actually landing. The
+        idx_photos_captured_at index makes this a cheap top-1 lookup.
+        """
+        with self._db.connect() as conn:
+            row = conn.execute(
+                "SELECT captured_at FROM photos ORDER BY captured_at DESC LIMIT 1"
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(row[0]))
+        except (ValueError, TypeError):
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
     def delete(self, photo_id: int, *, remove_file: bool = True) -> bool:
         record = self.get(photo_id)
         if record is None:

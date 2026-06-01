@@ -56,8 +56,78 @@ def _worst(statuses: list[str]) -> str:
 # probes keep their own try/except so a partial failure still yields a
 # meaningful detail string.
 
+def _capture_freshness() -> Check | None:
+    """Truth signal for camera health on a *scheduled* station.
+
+    The camera beacon records the last op (detect/capture/preview). A
+    detect() succeeds whenever the body is merely *present*, so the
+    beacon can read green while every actual capture fails with a USB
+    `-1` error — exactly the false-green we hit in production. So when a
+    schedule is enabled, health is judged by whether photos are actually
+    landing within the schedule cadence, not by detection.
+
+    Returns:
+      * a Check (ok / warn / bad) when an enabled schedule exists and at
+        least one photo has ever been captured — this is authoritative
+        and overrides the beacon,
+      * None when there is no enabled schedule (manual-only station) or
+        no photos yet (a brand-new station shouldn't alarm) — the caller
+        then falls back to the beacon.
+    """
+    try:
+        from arclap_station.db import get_db  # noqa: PLC0415
+        from arclap_station.photos.store import get_store  # noqa: PLC0415
+
+        with get_db().connect() as conn:
+            rows = conn.execute(
+                "SELECT interval_min FROM schedules WHERE enabled=1"
+            ).fetchall()
+        intervals = [int(r["interval_min"]) for r in rows if r["interval_min"]]
+        if not intervals:
+            return None  # manual-only — defer to the beacon
+        interval_min = max(1, min(intervals))
+
+        latest = get_store().latest_captured_at()
+        if latest is None:
+            return None  # schedule set but nothing captured yet — don't alarm
+
+        age_min = (datetime.now(UTC) - latest).total_seconds() / 60.0
+        grace = 2.0
+        hint = (
+            "Detection can still succeed while captures fail (USB transport, "
+            "cable, or power). Check the cable is a data cable, the official "
+            "5 A PSU is in use, and the body's auto-power-off is disabled. The "
+            "station auto-recovers (reconnect → USB power-cycle → restart)."
+        )
+        if age_min > 2 * interval_min + grace:
+            return Check(
+                "camera", "Camera", "bad",
+                f"No photo in {age_min:.0f} min — schedule fires every "
+                f"{interval_min} min, so captures are failing.",
+                hint,
+            )
+        if age_min > interval_min + grace:
+            return Check(
+                "camera", "Camera", "warn",
+                f"Last photo {age_min:.0f} min ago (schedule every {interval_min} min) "
+                "— a capture may have been missed.",
+                "Watching for the next scheduled capture. " + hint,
+            )
+        return Check(
+            "camera", "Camera", "ok",
+            f"Capturing on schedule · last photo {age_min:.0f} min ago.",
+        )
+    except Exception:  # noqa: BLE001
+        return None  # never let the truth-probe break the self-test
+
+
 def _check_camera() -> Check:
     try:
+        # Primary signal on a scheduled station: are photos landing?
+        fresh = _capture_freshness()
+        if fresh is not None:
+            return fresh
+
         from arclap_station.camera import health as cam_health  # noqa: PLC0415
 
         st = cam_health.read_state()

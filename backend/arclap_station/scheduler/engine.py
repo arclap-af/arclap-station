@@ -220,13 +220,32 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
     except (OSError, ValueError, ImportError):
         pass  # fall through — capture will fail loudly if disk is truly dead
 
-    photo_path = adapter.capture()
+    try:
+        photo_path = adapter.capture()
+    except Exception as exc:  # noqa: BLE001
+        # A scheduled capture failed outright. Record it in the audit
+        # log (§12.10 capture.failed) so missed captures show up in
+        # Recent Activity, and return a structured result instead of
+        # letting the exception bubble to APScheduler — which otherwise
+        # logs a full traceback every interval. The adapter has already
+        # run its own capture-failure recovery ladder before raising.
+        try:
+            from arclap_station.audit import emit as _audit  # noqa: PLC0415
+            _audit(
+                "system",
+                "capture.failed",
+                {"schedule_id": schedule_id, "error": str(exc)[:300]},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        log.error("scheduled capture failed schedule=%s: %s", schedule_id, exc)
+        return {"ok": False, "error": "capture_failed", "detail": str(exc)[:300]}
     # Same EXIF + watermark/rotate path as /api/camera/capture.
     try:
         from arclap_station.photos.watermark import apply_watermark_and_rotate  # noqa: PLC0415
         apply_watermark_and_rotate(photo_path)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        log.debug("watermark/rotate failed (continuing): %s", exc)
     exif, width, height = extract_exif(photo_path)
 
     # Perceptual-hash dedup: if this frame is near-identical to the last
@@ -246,7 +265,8 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
             if maybe_drop_duplicate(photo_path, schedule_id, threshold):
                 return {"ok": False, "skipped": True, "reason": "duplicate"}
         new_hash_value = compute_dhash(photo_path)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.debug("dedup hashing failed (continuing): %s", exc)
         new_hash_value = None
 
     store = get_store()

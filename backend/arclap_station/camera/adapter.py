@@ -158,6 +158,17 @@ class _GPhoto2Backend:
     # camera is genuinely absent.
     MAX_CONSECUTIVE_INIT_FAILURES = 3
     SERVICE_RESTART_COOLDOWN_SEC = 300
+    # Capture-failure escalation. init() succeeding while capture()
+    # keeps failing (the classic Canon `-1 Unspecified error` from a
+    # marginal cable / power / a sleeping body) used to escalate
+    # NOWHERE — the body is "detected" so the init-failure ladder never
+    # tripped, and the station silently missed every scheduled capture.
+    # After this many CONSECUTIVE final capture failures we run the same
+    # recovery ladder (USB power-cycle → service self-restart). A
+    # generous threshold + cooldown keeps a genuinely-faulty cable from
+    # turning into a restart loop: it recovers at most once per cooldown.
+    MAX_CONSECUTIVE_CAPTURE_FAILURES = 4
+    CAPTURE_ESCALATION_COOLDOWN_SEC = 900
 
     def __init__(self) -> None:
         import gphoto2 as gp  # noqa: PLC0415 - imported lazily on real Pi only
@@ -169,6 +180,10 @@ class _GPhoto2Backend:
         # J: count of consecutive ensure() failures since the last
         # successful init. Reset to 0 on any successful Camera().init().
         self._consecutive_init_failures: int = 0
+        # Consecutive final capture() failures since the last success.
+        # Drives the capture-failure escalation ladder (see capture()).
+        self._consecutive_capture_failures: int = 0
+        self._last_capture_escalation: float = 0.0
         # libgphoto2 is not thread-safe at the device level. Without this
         # lock, concurrent /api/camera/* requests (the Camera page fires
         # info, settings and properties in parallel via React Query) all
@@ -380,6 +395,68 @@ class _GPhoto2Backend:
         except Exception as exc:  # noqa: BLE001
             log.debug("usb power-cycle attempt failed: %s", exc)
             return False
+
+    def _note_capture_failure(self, exc: Exception) -> None:
+        """Count a final capture failure and escalate at the threshold.
+
+        Runs the same recovery ladder as repeated init failures, but
+        keyed off capture failures so a body that *detects* fine yet
+        can't actually capture (marginal cable / power / wedged PTP
+        session) is recovered instead of silently missing every frame.
+
+        Ladder: USB bus power-cycle (drops the handle; no-op without a
+        switchable hub) → service self-restart (fresh address space).
+        A cooldown means we recover at most once per
+        CAPTURE_ESCALATION_COOLDOWN_SEC, so a genuinely-broken cable
+        can't turn into a restart loop. Never raises.
+        """
+        import time as _t  # noqa: PLC0415
+
+        try:
+            with self._lock:
+                self._consecutive_capture_failures += 1
+                n = self._consecutive_capture_failures
+                if n < self.MAX_CONSECUTIVE_CAPTURE_FAILURES:
+                    return
+                now = _t.time()
+                if now - self._last_capture_escalation < self.CAPTURE_ESCALATION_COOLDOWN_SEC:
+                    return
+                self._last_capture_escalation = now
+
+            # Audit per §12.10 so the bump is explained in Recent Activity.
+            try:
+                from arclap_station.audit import emit as audit_emit  # noqa: PLC0415
+
+                audit_emit(
+                    "system",
+                    "camera.capture_recovery",
+                    {"consecutive_failures": n, "last_error": str(exc)[:300]},
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            log.error(
+                "camera capture failing repeatedly (%d consecutive) — running "
+                "recovery ladder (last error: %s)",
+                n,
+                exc,
+            )
+
+            # Rung 1: USB bus power-cycle (also drops our handle). If a
+            # real hub cycled, let the fresh bus re-enumerate before
+            # anything heavier.
+            if self._try_usb_power_cycle():
+                with self._lock:
+                    self._consecutive_capture_failures = 0
+                return
+
+            # Rung 2: no switchable hub → drop the handle (next capture
+            # re-inits fresh) and self-restart to clear any wedged
+            # libgphoto2 PTP state. _trigger_service_restart self-guards
+            # with its own sentinel cooldown if it fires too often.
+            self._drop_handle()
+            self._trigger_service_restart(exc)
+        except Exception:  # noqa: BLE001 - recovery must never mask the original error
+            log.debug("capture-failure escalation hit an error", exc_info=True)
 
     # ---- stuck-camera self-restart (J) -----------------------------------
 
@@ -600,9 +677,12 @@ class _GPhoto2Backend:
                 except gp.GPhoto2Error:
                     pass
                 self._beacon_ok(self._info.model if self._info else None)
+                # A real frame landed — clear the capture-failure streak.
+                self._consecutive_capture_failures = 0
                 return Path(str(target))
         except Exception as exc:
             self._beacon_failure(str(exc))
+            self._note_capture_failure(exc)
             raise
         finally:
             timer.cancel()

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { apiFetch, apiJson } from "../api";
 
-export const destinationKind = z.enum(["s3", "sftp", "ftp", "webhook", "local", "mqtt", "arc"]);
+export const destinationKind = z.enum(["s3", "sftp", "ftp", "webhook", "local", "mqtt"]);
 export type DestinationKind = z.infer<typeof destinationKind>;
 
 export interface Destination {
