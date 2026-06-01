@@ -200,9 +200,31 @@ class CameraWatchdog:
             self._save_state(state)
             return 0
 
+        # The beacon can report a FRESH capture failure while the body
+        # still enumerates and even answers `gphoto2 --auto-detect` —
+        # auto-detect proves the camera is *present*, not that captures
+        # work. That is the "detects-but-can't-capture" wedge (a stuck
+        # PTP session: the classic Canon -1 / -110). If we let a passing
+        # auto-detect mark us "recovered" here, the reset ladder would
+        # never engage for that case — the exact blind spot that let the
+        # backend silently miss every scheduled capture. So when the
+        # beacon is freshly failing, treat the station as unhealthy
+        # regardless of what auto-detect says.
+        beacon = camera_health.read_state()
+        beacon_age = camera_health.beacon_age_sec()
+        beacon_failing = bool(
+            beacon_age is not None
+            and beacon_age < camera_health.STALE_AFTER_SEC
+            and beacon.get("ok") is False
+            and beacon.get("last_error")
+        )
+
         # Beacon stale-or-failure AND device still enumerated → run our
-        # own enumerate-only check as a last resort.
-        if self._gphoto_responsive():
+        # own enumerate-only check. A passing probe only counts as
+        # "recovered" when the backend isn't actively failing captures
+        # (beacon_failing short-circuits the probe so we don't even spend
+        # a gphoto2 subprocess when we already know captures are failing).
+        if not beacon_failing and self._gphoto_responsive():
             if state["fail_count"] > 0:
                 _safe_audit(
                     "camera.recovered",
@@ -219,11 +241,21 @@ class CameraWatchdog:
         # Unhealthy probe.
         state["fail_count"] += 1
         self._save_state(state)
-        log.warning(
-            "watchdog probe failed (fail_count=%d, reset_count=%d)",
-            state["fail_count"],
-            state["reset_count"],
-        )
+        if beacon_failing:
+            log.warning(
+                "camera enumerates but the backend reports capture failure "
+                "(last_error=%s) — treating as unhealthy (fail_count=%d, "
+                "reset_count=%d)",
+                beacon.get("last_error"),
+                state["fail_count"],
+                state["reset_count"],
+            )
+        else:
+            log.warning(
+                "watchdog probe failed (fail_count=%d, reset_count=%d)",
+                state["fail_count"],
+                state["reset_count"],
+            )
 
         if state["fail_count"] < FAIL_THRESHOLD:
             return 1
