@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # Current schema version. Bump when adding a migration.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS upload_queue (
 
 CREATE INDEX IF NOT EXISTS idx_uq_state_next ON upload_queue(state, next_at);
 CREATE INDEX IF NOT EXISTS idx_uq_photo ON upload_queue(photo_id);
+CREATE INDEX IF NOT EXISTS idx_uq_dest ON upload_queue(dest_id);
+CREATE INDEX IF NOT EXISTS idx_uq_updated ON upload_queue(updated_at);
 
 CREATE TABLE IF NOT EXISTS schedules (
     id            TEXT PRIMARY KEY,
@@ -259,6 +261,18 @@ class Database:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_timelapses_period_start "
                     "ON timelapses(period, start_at DESC)"
+                )
+            if current < 4:
+                # Perf (v0.9): the per-destination card metrics + the
+                # keep-local cleanup filter upload_queue by dest_id, and
+                # bytes-today filters by updated_at. Neither was indexed
+                # — fine at hundreds of rows, a full scan at the tens of
+                # thousands a station accumulates over a deployment.
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_uq_dest ON upload_queue(dest_id)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_uq_updated ON upload_queue(updated_at)"
                 )
             # Write the new version.
             if row is None:

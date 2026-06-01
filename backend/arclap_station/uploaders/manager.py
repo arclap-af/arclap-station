@@ -112,7 +112,7 @@ def _destination_metrics(dest_id: str) -> dict[str, int]:
                 JOIN photos p ON p.id = q.photo_id
                 WHERE q.dest_id=?
                   AND q.state='ok'
-                  AND DATE(q.updated_at)=DATE('now')
+                  AND q.updated_at >= date('now')
                 """,
                 (dest_id,),
             ).fetchone()

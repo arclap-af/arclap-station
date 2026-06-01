@@ -54,7 +54,7 @@ async def system_info(_: dict[str, Any] = Depends(require_session)) -> dict[str,
     try:
         with get_db().connect() as conn:
             captures_today = int(conn.execute(
-                "SELECT COUNT(*) FROM photos WHERE date(captured_at)=date('now')"
+                "SELECT COUNT(*) FROM photos WHERE captured_at >= date('now')"
             ).fetchone()[0])
             queue_pending = int(conn.execute(
                 "SELECT COUNT(*) FROM upload_queue WHERE state NOT IN ('ok','failed_permanent')"

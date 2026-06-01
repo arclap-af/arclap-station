@@ -35,6 +35,19 @@ RestartSec=3
 TimeoutStartSec=60
 TimeoutStopSec=30
 
+# Software watchdog. The app sends sd_notify WATCHDOG=1 from inside its
+# asyncio event loop (see watchdog_notify.py) every WatchdogSec/2. If
+# the loop HANGS — deadlock, wedged libgphoto2 call, stuck I/O —
+# systemd stops getting pings and, after WatchdogSec, kills + restarts
+# the service. This is what `Restart=always` alone cannot do: it
+# recovers a hang, not just a crash. 60s gives generous headroom over
+# the longest legitimate in-loop pause (a slow capture runs in a
+# worker thread, not the loop, so it doesn't starve the petting).
+# Works with Type=simple — it does NOT require Type=notify; the unit
+# only needs to allow the main process to notify (NotifyAccess=main,
+# the default).
+WatchdogSec=60
+
 # (StartLimitIntervalSec/StartLimitBurst live in [Unit] above —
 # putting them here makes systemd silently revert to defaults.)
 

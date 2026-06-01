@@ -51,6 +51,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
     settings.paths.ensure()
+    # Boot guard: if a power-loss left state.db corrupt, restore from the
+    # newest nightly backup BEFORE we open it — otherwise the service
+    # opens a broken DB and crash-loops. Self-heals (loses at most a
+    # day of metadata; photo files on disk are untouched). Never raises.
+    try:
+        from arclap_station.backup import ensure_db_integrity_on_boot  # noqa: PLC0415
+
+        guard = ensure_db_integrity_on_boot()
+        if guard.get("action") == "restored":
+            log.warning("state.db auto-restored on boot: %s", guard)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("db integrity boot-guard skipped: %s", exc)
     db = get_db()
     db.initialise()
     # Populate station.serial from /proc/cpuinfo on first boot (idempotent).
@@ -153,11 +165,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     keepalive_task = asyncio.create_task(_keepalive_loop())
 
+    # systemd software watchdog — pet it from inside the event loop so a
+    # HANG (not just a crash) gets the service killed + restarted. No-op
+    # when not running under systemd / WatchdogSec unset (dev, tests).
+    async def _watchdog_loop() -> None:
+        from arclap_station import watchdog_notify as _wd  # noqa: PLC0415
+
+        _wd.notify_ready()
+        interval = _wd.watchdog_interval_seconds()
+        if interval is None:
+            return  # watchdog not enabled for this run — nothing to do
+        log.info("systemd watchdog active — petting every %.0fs", interval)
+        # Send the first ping immediately so we never miss the opening window.
+        _wd.notify_watchdog()
+        while True:
+            await asyncio.sleep(interval)
+            _wd.notify_watchdog()
+
+    watchdog_task = asyncio.create_task(_watchdog_loop())
+
     log.info("arclap-station started — etc=%s var=%s", settings.paths.etc, settings.paths.var)
     try:
         yield
     finally:
-        _bg_tasks = (wal_task, health_task, heartbeat_task, keepalive_task)
+        _bg_tasks = (wal_task, health_task, heartbeat_task, keepalive_task, watchdog_task)
         for _t in _bg_tasks:
             _t.cancel()
         for _t in _bg_tasks:

@@ -141,6 +141,87 @@ def integrity_check() -> dict[str, Any]:
     return {"ok": ok, "result": result_text}
 
 
+def latest_snapshot() -> Path | None:
+    """Most recent compressed snapshot, or None if there are none."""
+    snaps = sorted(_backup_root().glob("state-*.db.gz"))
+    return snaps[-1] if snaps else None
+
+
+def restore_latest() -> dict[str, Any]:
+    """Restore state.db from the newest backup, preserving the corrupt
+    original alongside for forensics. Returns {ok, restored_from, ...}."""
+    snap = latest_snapshot()
+    if snap is None:
+        return {"ok": False, "reason": "no_backup"}
+    db_path = get_settings().paths.state_db
+    # Move the corrupt DB (and its WAL sidecars) aside rather than
+    # deleting — an operator may want to data-recover from it later.
+    # Best-effort: if a sidecar can't be moved (still locked), removing
+    # it is enough; restoring a working DB matters more than keeping the
+    # broken one. The main-file move is also best-effort — we overwrite
+    # it below regardless.
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    if db_path.exists():
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(db_path) + suffix)
+            if not p.exists():
+                continue
+            try:
+                p.rename(Path(f"{db_path}.corrupt-{stamp}{suffix}"))
+            except OSError:
+                if suffix:  # sidecar — just drop it
+                    try:
+                        p.unlink()
+                    except OSError:
+                        pass
+    # Decompress the snapshot into place via a temp file + atomic
+    # replace, so an interrupted restore can't leave a half-written DB.
+    try:
+        tmp = Path(f"{db_path}.restoring")
+        with gzip.open(snap, "rb") as fin, tmp.open("wb") as fout:
+            shutil.copyfileobj(fin, fout)
+        import os as _os  # noqa: PLC0415
+
+        _os.replace(tmp, db_path)
+    except OSError as exc:
+        log.exception("restore_latest failed")
+        return {"ok": False, "reason": "restore_error", "error": str(exc)}
+    return {"ok": True, "restored_from": snap.name}
+
+
+def ensure_db_integrity_on_boot() -> dict[str, Any]:
+    """Boot guard: if state.db is corrupt, restore from the latest backup
+    BEFORE the app opens it.
+
+    A power-loss mid-write (the construction-site reality) can leave the
+    SD-resident DB corrupt. Without this, the service would open a broken
+    DB and crash-loop or run blind. With it, the station self-heals from
+    the nightly snapshot and comes up clean (losing at most a day of
+    metadata, never the photos themselves — those are files on disk).
+
+    Returns a result dict; never raises (a guard that crashes is worse
+    than the corruption it guards against).
+    """
+    try:
+        db_path = get_settings().paths.state_db
+        if not db_path.exists():
+            return {"ok": True, "action": "none", "reason": "fresh_db"}
+        check = integrity_check()
+        if check.get("ok"):
+            return {"ok": True, "action": "none"}
+        # Corrupt — attempt restore.
+        log.error("state.db failed integrity check (%s) — restoring from backup", check)
+        restored = restore_latest()
+        try:
+            audit_emit("system", "db.auto_restore", {"integrity": check, "restore": restored})
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": restored.get("ok", False), "action": "restored", **restored}
+    except Exception as exc:  # noqa: BLE001
+        log.exception("ensure_db_integrity_on_boot crashed (continuing): %s", exc)
+        return {"ok": False, "action": "guard_error", "error": str(exc)}
+
+
 def run_backup() -> int:
     """CLI entrypoint for `arclap-station backup`."""
     logging.basicConfig(

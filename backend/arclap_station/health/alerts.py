@@ -85,8 +85,11 @@ def _station_summary() -> dict[str, Any]:
         from arclap_station.db import get_db  # noqa: PLC0415
 
         with get_db().connect() as conn:
+            # Sargable: captured_at >= start-of-UTC-today uses the
+            # idx_photos_captured_at index. date(captured_at)=date('now')
+            # would wrap the column in a function → full scan.
             out["captures_today"] = int(conn.execute(
-                "SELECT COUNT(*) FROM photos WHERE date(captured_at)=date('now')"
+                "SELECT COUNT(*) FROM photos WHERE captured_at >= date('now')"
             ).fetchone()[0])
             out["queue_pending"] = int(conn.execute(
                 "SELECT COUNT(*) FROM upload_queue WHERE state NOT IN ('ok','failed_permanent')"

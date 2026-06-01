@@ -610,8 +610,45 @@ install_systemd() {
   # standalone unit is redundant. Defensively remove any stale copy.
   rm -f /etc/systemd/system/arclap-uploader.service
 
+  # --- v0.9 stability hardening: watchdog + SD-card longevity ---------
+  # Pi hardware watchdog: systemd pets /dev/watchdog; if systemd itself
+  # hangs for 15s the BCM2712 hardware watchdog hard-reboots the Pi.
+  # (The per-service software watchdog is in arclap-station.service via
+  # WatchdogSec — that catches a hung app; this catches a hung system.)
+  mkdir -p /etc/systemd/system.conf.d
+  cat > /etc/systemd/system.conf.d/10-arclap-watchdog.conf <<'EOF'
+[Manager]
+RuntimeWatchdogSec=15
+RebootWatchdogSec=2min
+EOF
+
+  # journald: cap size so logs don't grind the SD card over a long
+  # deployment (rotation instead of unbounded growth).
+  mkdir -p /etc/systemd/journald.conf.d
+  cat > /etc/systemd/journald.conf.d/10-arclap.conf <<'EOF'
+[Journal]
+SystemMaxUse=100M
+SystemMaxFileSize=20M
+RuntimeMaxUse=50M
+EOF
+  systemctl restart systemd-journald 2>/dev/null || true
+
+  # noatime on the root fs: eliminates a metadata write on every file
+  # read (serving thumbnails, reading config). Apply live + persist in
+  # fstab. Only touch the root line, and only if noatime isn't already
+  # present, so we never corrupt a working fstab.
+  mount -o remount,noatime / 2>/dev/null || warn "could not remount / noatime (continuing)"
+  if [[ -f /etc/fstab ]] && ! awk '$2=="/"{print $4}' /etc/fstab | grep -q noatime; then
+    cp /etc/fstab "/etc/fstab.bak.$(date +%Y%m%d-%H%M%S)"
+    # Append ',noatime' to the options field (col 4) of the / mount only.
+    awk 'BEGIN{OFS="\t"} $2=="/" && $4 !~ /noatime/ {$4=$4",noatime"} {print}' \
+      /etc/fstab > /etc/fstab.arclap.tmp && mv /etc/fstab.arclap.tmp /etc/fstab
+    ok "added noatime to / in fstab (backup kept)"
+  fi
+
+  systemctl daemon-reexec 2>/dev/null || true
   systemctl daemon-reload
-  ok "systemd units installed"
+  ok "systemd units installed + stability hardening applied"
 }
 
 # ---------------------------------------------------------------------------

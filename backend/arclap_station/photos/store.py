@@ -24,8 +24,10 @@ def _list_where(
     clauses: list[str] = []
     params: list[Any] = []
     if date:
-        clauses.append("date(captured_at) = date(?)")
-        params.append(date)
+        # Sargable range instead of date(captured_at)=date(?), so the
+        # idx_photos_captured_at index is used rather than a full scan.
+        clauses.append("captured_at >= ? AND captured_at < date(?, '+1 day')")
+        params.extend([date, date])
     if upload_filter and upload_filter != "all":
         f = upload_filter.lower()
         if f == "uploaded":
