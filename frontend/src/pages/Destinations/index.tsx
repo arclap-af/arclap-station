@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../../components/Button";
+import { EmptyState } from "../../components/EmptyState";
 import { FormField, TextInput } from "../../components/FormField";
 import { Pill, StatusDot } from "../../components/Pill";
 import { Toggle } from "../../components/Toggle";
+import { Icon, I } from "../../components/icons";
 import { destinations, type Destination, type DestinationDraft, type DestinationKind, type DestinationTest } from "../../lib/bridge/destinations";
 
 import { S3Form } from "./forms/S3Form";
@@ -280,9 +282,17 @@ export function Destinations() {
               </div>
             ))}
             {items.length === 0 && !pickerOpen && (
-              <div className="as-card" style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>No destinations</div>
-                <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Photos stay on the Pi until you add one.</div>
+              <div className="as-card" style={{ padding: 0 }}>
+                <EmptyState
+                  icon={I.upload}
+                  title="No destinations yet"
+                  message="Photos stay on the Pi until you add a destination. Add an FTP, SFTP, S3, local disk, webhook, or MQTT target to start uploading."
+                  action={
+                    <Button variant="primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={() => setPickerOpen(true)}>
+                      <Icon d={I.plus} size={14} /> Add destination
+                    </Button>
+                  }
+                />
               </div>
             )}
           </div>

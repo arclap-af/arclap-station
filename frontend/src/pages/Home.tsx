@@ -67,13 +67,13 @@ export function Home() {
           </div>
         </div>
 
-        <div className="as-grid-4" style={{ marginBottom: 14 }}>
+        <div className="as-grid-4 as-stagger" style={{ marginBottom: 14 }}>
           <Stat label="Status" val={t.status === "online" ? "Online" : t.status === "warn" ? "Warning" : "Offline"} sub={`Last sync ${t.last_sync_seconds_ago}s`} color="var(--as-accent-2)" />
           <Stat label="Captures today" val={String(t.captures_today)} sub={t.next_capture_seconds !== null ? `Next in ${Math.round(t.next_capture_seconds / 60)} min` : "No active schedule"} />
           <Stat label="Queue" val={String(t.queue_pending)} sub={`Avg upload ${t.avg_upload_seconds.toFixed(1)}s`} />
           <Stat label="Storage" val={`${Math.round(t.storage_used_pct)}%`} sub={`${fmtBytes(t.storage_free_bytes)} free`} />
         </div>
-        <div className="as-grid-4" style={{ marginBottom: 18 }}>
+        <div className="as-grid-4 as-stagger" style={{ marginBottom: 18 }}>
           <Stat label="CPU" val={`${Math.round(t.cpu_pct)}%`} sub={`${t.cpu_temp_c.toFixed(1)}°C`} />
           <Stat label="Memory" val={`${Math.round(t.memory_used_mb)} MB`} sub={`of ${Math.round(t.memory_total_mb)} MB`} />
           <Stat label="Network" val={`${t.network_throughput_mbps.toFixed(1)} Mbps`} sub={t.network_signal_dbm !== null ? `Wi-Fi · ${t.network_signal_dbm} dBm` : "Wired"} />

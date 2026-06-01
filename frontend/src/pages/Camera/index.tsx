@@ -130,8 +130,10 @@ export function CameraPage() {
           </div>
         </div>
 
-        {/* Big capture button + last photo */}
-        <div className="as-grid-2" style={{ alignItems: "start", gap: 14, gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)" }}>
+        {/* Big capture button + last photo. Responsive 2→1 column via
+            .as-cam-2col (don't inline grid-template-columns — it would
+            beat the media query and stay cramped on mobile). */}
+        <div className="as-cam-2col">
           {/* Left: chips + capture */}
           <div className="as-card">
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Quick settings</div>
@@ -249,22 +251,13 @@ function ChipRow({
       <div style={{ fontSize: 11, color: "var(--as-ink-3)", marginBottom: 5, textTransform: "uppercase", letterSpacing: 0.06 }}>
         {label} <span style={{ color: "var(--as-ink-2)", fontFamily: "var(--as-mono)", marginLeft: 6 }}>{value}</span>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
         {choices.map((c) => (
           <button
             key={c}
+            type="button"
             onClick={() => onPick(c)}
             className={`as-chip${c === value ? " active" : ""}`}
-            style={{
-              padding: "4px 10px",
-              border: "1px solid var(--as-line)",
-              background: c === value ? "var(--as-accent)" : "var(--as-fill-1)",
-              color: c === value ? "#04140e" : "var(--as-ink-1)",
-              borderRadius: 4,
-              fontSize: 11,
-              fontFamily: "var(--as-mono)",
-              cursor: "pointer",
-            }}
           >
             {c}
           </button>

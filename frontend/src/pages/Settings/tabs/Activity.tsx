@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "../../../components/Button";
+import { EmptyState } from "../../../components/EmptyState";
+import { I } from "../../../components/icons";
 import { apiJson } from "../../../lib/api";
 import { z } from "zod";
 
@@ -301,9 +303,23 @@ export function Activity() {
         })}
 
         {filtered.length === 0 && (
-          <div style={{ padding: 24, textAlign: "center", color: "var(--as-ink-3)" }}>
-            No events match.
-          </div>
+          <EmptyState
+            icon={filterId === "errors" ? I.check : I.clock}
+            title={
+              filterId === "errors"
+                ? "No errors — all clear"
+                : query || filterId !== "all"
+                  ? "No events match"
+                  : "No activity yet"
+            }
+            message={
+              filterId === "errors"
+                ? "Nothing has failed. Captures, uploads, and the camera are all behaving."
+                : query || filterId !== "all"
+                  ? "Try clearing the search or switching back to the All filter."
+                  : "Every meaningful action on this station shows up here — captures, uploads, schedules, logins, and system events."
+            }
+          />
         )}
       </div>
     </div>

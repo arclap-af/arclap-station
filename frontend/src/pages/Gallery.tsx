@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../components/Button";
+import { EmptyState } from "../components/EmptyState";
 import { Pill } from "../components/Pill";
 import { Icon, I } from "../components/icons";
 import { gallery, type Photo } from "../lib/bridge/gallery";
@@ -304,9 +306,35 @@ export function Gallery() {
         ))}
 
         {photos.length === 0 && (
-          <div className="as-card" style={{ padding: 48, textAlign: "center" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No photos yet</div>
-            <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Trigger a capture from the Camera page to start.</div>
+          <div className="as-card" style={{ padding: 0 }}>
+            <EmptyState
+              icon={I.gallery}
+              title={query || filter !== "all" ? "No photos match" : "No photos yet"}
+              message={
+                query || filter !== "all"
+                  ? "Try clearing the search or switching the filter back to All."
+                  : "Captures land here automatically. Take one from the Camera page or wait for the next scheduled capture."
+              }
+              action={
+                !query && filter === "all" ? (
+                  <Link to="/camera" style={{ textDecoration: "none" }}>
+                    <Button variant="primary" style={{ padding: "8px 16px", fontSize: 13 }}>
+                      <Icon d={I.camera} size={14} /> Open camera
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button
+                    style={{ padding: "8px 16px", fontSize: 13 }}
+                    onClick={() => {
+                      setQuery("");
+                      setFilter("all");
+                    }}
+                  >
+                    Clear filters
+                  </Button>
+                )
+              }
+            />
           </div>
         )}
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../components/Button";
+import { EmptyState } from "../components/EmptyState";
 import { FormField, Select, TextInput } from "../components/FormField";
 import { Pill, StatusDot } from "../components/Pill";
 import { Toggle } from "../components/Toggle";
@@ -205,9 +206,17 @@ export function SchedulePage() {
               </div>
             ))}
             {items.length === 0 && (
-              <div className="as-card" style={{ padding: 40, textAlign: "center" }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>No schedules</div>
-                <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Press “New schedule” to create one.</div>
+              <div className="as-card" style={{ padding: 0 }}>
+                <EmptyState
+                  icon={I.schedule}
+                  title="No schedules yet"
+                  message="Create a schedule to capture automatically at a set interval during your active hours."
+                  action={
+                    <Button variant="primary" style={{ padding: "8px 16px", fontSize: 13 }} onClick={openNew}>
+                      <Icon d={I.plus} size={14} /> New schedule
+                    </Button>
+                  }
+                />
               </div>
             )}
           </div>
