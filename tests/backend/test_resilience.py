@@ -98,6 +98,41 @@ def test_integrity_guard_restores_corrupt_db(fresh_db: Any) -> None:
     assert int(n) == 1
 
 
+def test_resilience_acceptance_checks_run(fresh_db: Any) -> None:
+    """The new Resilience acceptance checks run without error and return
+    valid states; DB-indexes + integrity + self-test pass on a fresh DB."""
+    from arclap_station.acceptance import runner as r  # noqa: PLC0415
+
+    results = {
+        "DB indexes": r._check_db_indexes(),
+        "DB integrity": r._check_db_integrity_acc(),
+        "Self-test": r._check_self_test_green(),
+        "Software watchdog": r._check_software_watchdog(),
+        "SD noatime": r._check_noatime(),
+        "Backup restorable": r._check_db_backup_restorable(),
+        "UPS": r._check_ups(),
+    }
+    for name, res in results.items():
+        assert res.state in ("ok", "fail", "skip"), f"{name}: bad state {res.state}"
+
+    # On a fresh isolated test DB these are concretely true:
+    assert results["DB indexes"].state == "ok", results["DB indexes"].detail
+    assert results["DB integrity"].state == "ok", results["DB integrity"].detail
+    # Self-test never 'bad' in the mock-camera test env.
+    assert results["Self-test"].state in ("ok",), results["Self-test"].detail
+
+
+def test_resilience_group_in_catalogue() -> None:
+    """The Resilience group is wired into the acceptance catalogue."""
+    from arclap_station.acceptance.runner import CHECKS  # noqa: PLC0415
+
+    groups = {g for g, _, _ in CHECKS}
+    assert "Resilience" in groups
+    resilience = [name for g, name, _ in CHECKS if g == "Resilience"]
+    assert "Software watchdog" in resilience
+    assert "Backup restorable" in resilience
+
+
 def test_integrity_guard_no_backup_reports_cleanly(fresh_db: Any) -> None:
     """Corrupt DB but no snapshot → guard reports failure, doesn't crash."""
     from arclap_station.backup import ensure_db_integrity_on_boot  # noqa: PLC0415

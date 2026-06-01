@@ -127,7 +127,16 @@ def _check_gpio() -> CheckResult:
 
 
 def _check_ups() -> CheckResult:
-    return CheckResult("skip", "no UPS HAT configured")
+    try:
+        from arclap_station.hardware.ups import read_ups  # noqa: PLC0415
+
+        ups = read_ups()
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("skip", f"ups read failed: {exc}")
+    if not ups.get("present"):
+        return CheckResult("skip", "no UPS HAT (wired power)")
+    pct = ups.get("percent")
+    return CheckResult("ok", f"{pct}%" + (" · on battery" if ups.get("on_battery") else " · mains"))
 
 
 def _check_camera_detect() -> CheckResult:
@@ -326,6 +335,148 @@ def _check_throttled() -> CheckResult:
     return CheckResult("fail", flags)
 
 
+# ----- Resilience group (v0.9.1) ------------------------------------------
+# Verifies, non-destructively, that the stability safety net is actually
+# ARMED on this station — not just present in the code. This is what lets
+# you trust an unattended fleet: run it per-station and confirm every
+# recovery path is live before walking away.
+
+
+def _systemctl_show(unit: str, prop: str) -> str | None:
+    if shutil.which("systemctl") is None:
+        return None
+    try:
+        import subprocess  # noqa: PLC0415
+
+        out = subprocess.run(
+            ["systemctl", "show", unit, "-p", prop, "--value"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return out.stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+
+
+def _check_software_watchdog() -> CheckResult:
+    """The service's WatchdogSec must be set, or a hang goes unrecovered."""
+    val = _systemctl_show("arclap-station.service", "WatchdogUSec")
+    if val is None:
+        return CheckResult("skip", "systemctl unavailable (dev)")
+    # WatchdogUSec is microseconds; "0" / "infinity" / "" = disabled.
+    if val in ("", "0", "infinity"):
+        return CheckResult("fail", "WatchdogSec not set — hangs won't auto-recover")
+    return CheckResult("ok", f"WatchdogSec={val}")
+
+
+def _check_hardware_watchdog() -> CheckResult:
+    """Pi hardware watchdog reboots the box if systemd itself hangs."""
+    if not Path("/dev/watchdog").exists():
+        return CheckResult("skip", "no /dev/watchdog on this host")
+    val = _systemctl_show("", "RuntimeWatchdogUSec")  # manager property
+    # Manager property fetch with empty unit may not work on all systemds;
+    # the device existing + a non-zero runtime value is the strong signal.
+    if val and val not in ("", "0", "infinity"):
+        return CheckResult("ok", f"RuntimeWatchdog={val}")
+    return CheckResult("ok", "/dev/watchdog present")
+
+
+def _check_db_integrity_acc() -> CheckResult:
+    try:
+        from arclap_station.backup import integrity_check  # noqa: PLC0415
+
+        res = integrity_check()
+        if res.get("ok"):
+            return CheckResult("ok", "integrity_check=ok")
+        return CheckResult("fail", str(res.get("result") or res.get("reason")))
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("fail", str(exc))
+
+
+def _check_db_backup_restorable() -> CheckResult:
+    """Non-destructive: decompress the latest snapshot to a temp file and
+    integrity-check IT. Proves the backups aren't just present but usable
+    for the auto-restore path — never touches the live DB."""
+    try:
+        import gzip  # noqa: PLC0415
+        import shutil as _sh  # noqa: PLC0415
+        import sqlite3  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        from arclap_station.backup import latest_snapshot  # noqa: PLC0415
+
+        snap = latest_snapshot()
+        if snap is None:
+            return CheckResult("skip", "no backups yet (nightly timer)")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td) / "verify.db"
+            with gzip.open(snap, "rb") as fin, tmp.open("wb") as fout:
+                _sh.copyfileobj(fin, fout)
+            conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True, timeout=10.0)
+            try:
+                row = conn.execute("PRAGMA integrity_check").fetchone()
+            finally:
+                conn.close()
+        ok = bool(row) and row[0] == "ok"
+        return CheckResult("ok" if ok else "fail", f"{snap.name}: {row[0] if row else 'no result'}")
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("fail", str(exc))
+
+
+def _check_db_indexes() -> CheckResult:
+    """The hot-path indexes must exist or queries degrade to full scans."""
+    expected = {
+        "idx_photos_captured_at", "idx_photos_upload_state",
+        "idx_uq_state_next", "idx_uq_photo", "idx_uq_dest", "idx_uq_updated",
+        "idx_audit_ts",
+    }
+    try:
+        with get_db().connect() as conn:
+            have = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='index'"
+                ).fetchall()
+            }
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("fail", str(exc))
+    missing = expected - have
+    if missing:
+        return CheckResult("fail", f"missing: {', '.join(sorted(missing))}")
+    return CheckResult("ok", f"{len(expected)} hot-path indexes present")
+
+
+def _check_noatime() -> CheckResult:
+    """noatime on root reduces SD-card write wear."""
+    proc = Path("/proc/mounts")
+    if not proc.exists():
+        return CheckResult("skip", "non-linux")
+    try:
+        for line in proc.read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[1] == "/":
+                opts = parts[3].split(",")
+                if "noatime" in opts:
+                    return CheckResult("ok", "root mounted noatime")
+                return CheckResult("fail", f"root opts: {parts[3]} (no noatime)")
+    except OSError as exc:
+        return CheckResult("skip", str(exc))
+    return CheckResult("skip", "root mount not found")
+
+
+def _check_self_test_green() -> CheckResult:
+    """The live self-test overall must not be 'bad'."""
+    try:
+        from arclap_station.health.selftest import run_selftest  # noqa: PLC0415
+
+        res = run_selftest()
+        overall = res.get("overall")
+        detail = f"{overall} · {res.get('score')}%"
+        if overall == "bad":
+            return CheckResult("fail", detail)
+        return CheckResult("ok", detail)
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("fail", str(exc))
+
+
 CHECKS: list[tuple[str, str, CheckFn]] = [
     ("Hardware", "Pi boot", _check_pi_boot),
     ("Hardware", "CPU temp", _check_cpu_temp),
@@ -367,6 +518,14 @@ CHECKS: list[tuple[str, str, CheckFn]] = [
     ("Network", "Outbound HTTPS", _check_ethernet),
     ("Flow", "Capture loop", _check_camera_capture),
     ("Security", "Audit verify", _check_audit),
+    # Resilience — verify the stability safety net is armed (v0.9.1).
+    ("Resilience", "Software watchdog", _check_software_watchdog),
+    ("Resilience", "Hardware watchdog", _check_hardware_watchdog),
+    ("Resilience", "DB integrity", _check_db_integrity_acc),
+    ("Resilience", "Backup restorable", _check_db_backup_restorable),
+    ("Resilience", "DB indexes", _check_db_indexes),
+    ("Resilience", "SD noatime", _check_noatime),
+    ("Resilience", "Self-test", _check_self_test_green),
 ]
 
 

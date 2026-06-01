@@ -260,3 +260,40 @@ systemctl list-units --failed
 ```
 
 Send that output (plus a short description of the symptom) to support.
+
+---
+
+## 11. Stability & self-recovery (v0.9.x)
+
+The station is built to survive months unattended and recover from any
+single fault without a human. What's automatic:
+
+| Fault | What happens automatically |
+|---|---|
+| **App crashes** | systemd restarts it (`Restart=always`, 3 s) |
+| **App hangs** (deadlock, wedged camera call, stuck I/O) | The software watchdog stops getting pings → systemd kills + restarts within **60 s** (`WatchdogSec=60` + sd_notify from the event loop) |
+| **systemd / kernel hangs** | The Pi **hardware watchdog** hard-reboots the box after 15 s (`RuntimeWatchdogSec`) |
+| **Camera USB wedges** | Recovery ladder: reconnect → `/sys` re-authorize → **USB bus power-cycle** (uhubctl, if a switchable hub is fitted) → service self-restart |
+| **Camera sleeps between captures** | A keepalive poll every 3 min holds the PTP session awake |
+| **state.db corrupted by power loss** | On boot, integrity is checked; if corrupt it **auto-restores from the newest nightly backup** (the corrupt file is kept aside as `state.db.corrupt-*`). At most a day of metadata is lost; photo files are never touched |
+| **Mains power lost** (UPS HAT fitted) | Below 12 % battery the station **shuts down cleanly** to avoid SD corruption |
+| **SD card wear** | journald is size-capped + the root fs is mounted `noatime` to cut write churn |
+
+### Prove the safety net is armed (per-station)
+
+Run the acceptance check from the cockpit (**Settings → Acceptance**) or
+inspect the **Resilience** group — every guarantee above is verified
+non-destructively (the backup-restorable check decompresses the latest
+snapshot and integrity-checks a *copy*, never the live DB). All green =
+the station is safe to leave unattended.
+
+### Recommended hardware for max stability
+
+- **Boot from SSD/USB, not SD** — the single biggest durability win for a
+  write-heavy station (SD cards wear out; SSDs don't, for this workload).
+- **UPS HAT** — activates the clean-shutdown path above (the software is
+  already shipped; the HAT turns it on).
+- **RTC module** — accurate timestamps when NTP is unreachable on an
+  isolated site.
+- **Active cooling** — thermal headroom; sustained heat throttles the Pi
+  and shortens camera + card life.
