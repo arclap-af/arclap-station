@@ -14,11 +14,23 @@
   --as-accent: #10b981;
   --as-accent-2: #34d399;
   --as-accent-soft: rgba(16, 185, 129, 0.12);
+  --as-accent-glow: rgba(16, 185, 129, 0.35);
   --as-warn: #f59e0b;
   --as-bad: #ef4444;
   --as-blue: #3b82f6;
   --as-font: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
   --as-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Elevation + motion tokens shared across the cockpit. Centralised
+     so the polish stays consistent without every component re-rolling
+     its own shadow / easing values. */
+  --as-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.25), 0 1px 1px rgba(0, 0, 0, 0.15);
+  --as-shadow-2: 0 6px 18px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
+  --as-shadow-3: 0 18px 50px rgba(0, 0, 0, 0.45), 0 6px 18px rgba(0, 0, 0, 0.3);
+  --as-ease: cubic-bezier(0.2, 0.7, 0.15, 1);
+  --as-r-sm: 6px;
+  --as-r-md: 8px;
+  --as-r-lg: 12px;
+  --as-r-xl: 16px;
 }
 
 * {
@@ -81,15 +93,19 @@ textarea {
 }
 .as-brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 18px; }
 .as-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
   background: var(--as-accent);
   color: #04140e;
   display: grid;
   place-items: center;
   font-weight: 800;
   font-size: 16px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.15) inset,
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 8px 22px -8px var(--as-accent-glow);
 }
 .as-brand-title { font-size: 14.5px; font-weight: 700; letter-spacing: -0.01em; }
 .as-brand-sub {
@@ -106,20 +122,42 @@ textarea {
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  border-radius: 8px;
+  border-radius: var(--as-r-md);
   color: var(--as-ink-2);
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 100ms;
+  transition: background 140ms var(--as-ease), color 140ms var(--as-ease);
   text-decoration: none;
   border: none;
   background: transparent;
   width: 100%;
   text-align: left;
+  position: relative;
 }
 .as-nav-item:hover { background: var(--as-surface); color: var(--as-ink); }
-.as-nav-item.active { background: var(--as-accent-soft); color: var(--as-accent-2); font-weight: 600; }
+.as-nav-item.active {
+  background: var(--as-accent-soft);
+  color: var(--as-accent-2);
+  font-weight: 600;
+}
+.as-nav-item.active::before {
+  /* Vertical accent rail on the left edge — anchors the active row
+     visually without depending on bg colour alone. */
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--as-accent);
+  box-shadow: 0 0 12px var(--as-accent-glow);
+}
+.as-nav-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
+}
 .as-nav-item .ic { width: 18px; height: 18px; flex-shrink: 0; }
 .as-nav-item .badge {
   margin-left: auto;
@@ -158,12 +196,19 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--as-surface);
+  background: var(--as-bg-2);
   border: 1px solid var(--as-line);
   padding: 6px 12px;
-  border-radius: 6px;
+  border-radius: var(--as-r-md);
   flex: 1;
-  max-width: 420px;
+  max-width: 460px;
+  transition: border-color 140ms var(--as-ease), background 140ms var(--as-ease),
+    box-shadow 140ms var(--as-ease);
+}
+.as-search:focus-within {
+  border-color: var(--as-accent);
+  background: var(--as-surface);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.12);
 }
 .as-search input {
   background: transparent;
@@ -173,6 +218,7 @@ textarea {
   flex: 1;
   font-size: 13px;
 }
+.as-search input::placeholder { color: var(--as-ink-4); }
 
 .as-pill {
   display: inline-flex;
@@ -197,8 +243,20 @@ textarea {
 .as-card {
   background: var(--as-surface);
   border: 1px solid var(--as-line);
-  border-radius: 12px;
+  border-radius: var(--as-r-lg);
   padding: 18px;
+  transition: border-color 140ms var(--as-ease), box-shadow 140ms var(--as-ease),
+    transform 140ms var(--as-ease);
+}
+/* Clickable cards (links, buttons disguised as cards, photo tiles) get
+   a subtle hover-lift so the operator knows they're interactive. */
+a > .as-card:hover,
+button > .as-card:hover,
+.as-card[role="button"]:hover,
+.as-card-interactive:hover {
+  border-color: var(--as-line-2);
+  box-shadow: var(--as-shadow-2);
+  transform: translateY(-1px);
 }
 .as-card-title { font-size: 14.5px; font-weight: 700; margin-bottom: 4px; }
 .as-card-sub { font-size: 12px; color: var(--as-ink-3); }
@@ -225,15 +283,35 @@ textarea {
   font-weight: 600;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background 100ms, transform 80ms;
+  transition:
+    background 140ms var(--as-ease),
+    color 140ms var(--as-ease),
+    border-color 140ms var(--as-ease),
+    transform 90ms var(--as-ease),
+    box-shadow 140ms var(--as-ease);
   font-family: inherit;
 }
-.as-btn:active { transform: translateY(0.5px); }
+.as-btn:hover:not(:disabled) { transform: translateY(-0.5px); }
+.as-btn:active:not(:disabled) {
+  transform: translateY(0.5px) scale(0.99);
+  filter: brightness(0.96);
+}
+.as-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.35);
+}
 .as-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.as-btn-primary { background: var(--as-accent); color: #04140e; }
-.as-btn-primary:hover:not(:disabled) { background: var(--as-accent-2); }
+.as-btn-primary {
+  background: var(--as-accent);
+  color: #04140e;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, var(--as-shadow-1);
+}
+.as-btn-primary:hover:not(:disabled) {
+  background: var(--as-accent-2);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, var(--as-shadow-2);
+}
 .as-btn-ghost { background: var(--as-surface); color: var(--as-ink); border-color: var(--as-line); }
-.as-btn-ghost:hover:not(:disabled) { background: var(--as-surface-2); }
+.as-btn-ghost:hover:not(:disabled) { background: var(--as-surface-2); border-color: var(--as-line-2); }
 .as-btn-icon {
   width: 40px;
   height: 40px;
@@ -246,8 +324,13 @@ textarea {
   display: grid;
   place-items: center;
   font-family: inherit;
+  transition: background 140ms var(--as-ease), color 140ms var(--as-ease), border-color 140ms var(--as-ease);
 }
-.as-btn-icon:hover { background: var(--as-surface-2); color: var(--as-ink); }
+.as-btn-icon:hover { background: var(--as-surface-2); color: var(--as-ink); border-color: var(--as-line-2); }
+.as-btn-icon:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.35);
+}
 
 .as-num { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; margin-bottom: 6px; }
 .as-num-sm { font-size: 14px; color: var(--as-ink-3); font-weight: 500; }
@@ -284,11 +367,19 @@ textarea {
   width: 100%;
   font-family: inherit;
 }
+.as-input,
+.as-select {
+  transition: border-color 140ms var(--as-ease), box-shadow 140ms var(--as-ease);
+}
 .as-input:focus,
 .as-select:focus {
-  outline: 2px solid var(--as-accent);
-  outline-offset: -1px;
+  outline: none;
   border-color: var(--as-accent);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+}
+.as-input:hover:not(:focus):not(:disabled),
+.as-select:hover:not(:focus):not(:disabled) {
+  border-color: var(--as-line-2);
 }
 .as-input::placeholder { color: var(--as-ink-4); }
 .as-select {
@@ -365,8 +456,19 @@ textarea {
   border-top: none;
   border-right: none;
   font-family: inherit;
+  transition: color 140ms var(--as-ease), border-color 140ms var(--as-ease),
+    background 140ms var(--as-ease);
+}
+.as-tab:hover:not(.active) {
+  color: var(--as-ink);
+  background: linear-gradient(to top, var(--as-surface) 0%, transparent 80%);
 }
 .as-tab.active { color: var(--as-accent-2); border-bottom-color: var(--as-accent); font-weight: 600; }
+.as-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.3);
+  border-radius: 6px 6px 0 0;
+}
 
 /* ───── Table ───── */
 .as-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -379,29 +481,41 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--as-line);
+  background: var(--as-bg-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 .as-tbl tbody td { padding: 11px 12px; border-bottom: 1px solid var(--as-line); }
+.as-tbl tbody tr {
+  transition: background 100ms var(--as-ease);
+}
 .as-tbl tbody tr:hover { background: var(--as-surface-2); cursor: pointer; }
+.as-tbl tbody tr:last-child td { border-bottom: none; }
 
 /* ───── Modal ───── */
 .as-veil {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
+  animation: as-fade 160ms var(--as-ease);
 }
+@keyframes as-fade { from { opacity: 0; } to { opacity: 1; } }
 .as-modal {
   background: var(--as-surface);
   border: 1px solid var(--as-line);
-  border-radius: 14px;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  border-radius: var(--as-r-xl);
+  box-shadow: var(--as-shadow-3);
   width: 100%;
   max-width: 460px;
+  animation: as-rise 220ms var(--as-ease);
 }
 
 /* ───── Camera page ───── */
@@ -452,23 +566,161 @@ textarea {
   gap: 5px;
 }
 
-/* ───── Login ───── */
+/* ───── Login ─────
+   Composed background:
+     - dark radial accent glow top-centre (the cockpit's signature)
+     - a faint dot-grid layer so a long PIN-entry wait doesn't sit on
+       a flat surface; mirrors the construction-site context
+   Card lifts on a soft shadow with a subtle accent ring on the
+   brand mark — anchors the operator's eye. */
 .as-login {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(ellipse at top, #15202b 0%, var(--as-bg) 60%);
   padding: 24px;
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% -10%, rgba(16, 185, 129, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse at top, #15202b 0%, var(--as-bg) 60%);
+}
+.as-login::before {
+  /* Subtle 24px dot-grid — only visible above the deep background. */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
 }
 .as-login-card {
   width: 100%;
-  max-width: 380px;
+  max-width: 400px;
   background: var(--as-surface);
   border: 1px solid var(--as-line);
-  border-radius: 16px;
-  padding: 32px;
+  border-radius: var(--as-r-xl);
+  padding: 36px 32px 32px;
+  box-shadow: var(--as-shadow-3);
+  animation: as-rise 320ms var(--as-ease) both;
 }
+@keyframes as-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.as-login-brand {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: var(--as-accent);
+  color: #04140e;
+  display: grid;
+  place-items: center;
+  margin: 0 auto 18px;
+  font-size: 26px;
+  font-weight: 800;
+  position: relative;
+  box-shadow:
+    0 0 0 6px rgba(16, 185, 129, 0.10),
+    0 18px 40px -10px var(--as-accent-glow);
+}
+.as-login-brand::after {
+  /* Soft outer glow that gently pulses — reads "alive" without being noisy. */
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 17px;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  filter: blur(0.5px);
+  animation: as-brand-pulse 3.2s ease-in-out infinite;
+}
+@keyframes as-brand-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+.as-login-eyebrow {
+  font-size: 11px;
+  color: var(--as-ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.as-login-title {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  text-align: center;
+}
+.as-login-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 auto 24px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: var(--as-mono);
+  color: var(--as-ink-3);
+  background: var(--as-bg-2);
+  border: 1px solid var(--as-line);
+  border-radius: 999px;
+}
+.as-login-host .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--as-accent);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+}
+.as-pin-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.as-pin-input {
+  width: 48px;
+  height: 60px;
+  text-align: center;
+  font-size: 24px;
+  padding: 0;
+  background: var(--as-bg-2);
+  border: 1px solid var(--as-line);
+  color: var(--as-ink);
+  border-radius: 10px;
+  font-family: var(--as-mono);
+  transition: border-color 120ms var(--as-ease), box-shadow 120ms var(--as-ease);
+}
+.as-pin-input:focus {
+  outline: none;
+  border-color: var(--as-accent);
+  box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+}
+.as-pin-input.err {
+  border-color: var(--as-bad);
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.18);
+  animation: as-shake 320ms var(--as-ease);
+}
+@keyframes as-shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-4px); }
+  40%      { transform: translateX(4px); }
+  60%      { transform: translateX(-2px); }
+  80%      { transform: translateX(2px); }
+}
+.as-login-msg {
+  font-size: 12.5px;
+  margin-top: 6px;
+  text-align: center;
+  min-height: 18px;
+}
+.as-login-msg.err  { color: var(--as-bad); }
+.as-login-msg.warn { color: var(--as-warn); }
+.as-login-msg.dim  { color: var(--as-ink-3); }
 
 button:not(:disabled),
 .as-nav-item,
@@ -554,3 +806,88 @@ button:not(:disabled),
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ───── Empty state (reusable across pages) ─────
+   Used wherever a list is genuinely empty — Gallery with no photos,
+   Schedule with no schedules, Activity with no events. Big enough
+   to feel intentional, small enough to fit inside cards. */
+.as-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  gap: 14px;
+  color: var(--as-ink-3);
+}
+.as-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--as-bg-2);
+  border: 1px solid var(--as-line);
+  color: var(--as-ink-3);
+  margin-bottom: 4px;
+}
+.as-empty-title {
+  color: var(--as-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.as-empty-msg {
+  font-size: 12.5px;
+  max-width: 380px;
+  line-height: 1.55;
+}
+.as-empty-cta { margin-top: 6px; }
+
+/* ───── Skeleton loaders ─────
+   Use anywhere data is loading so the page doesn't flash empty content.
+   Drop .as-skel on a block-level element with explicit width/height. */
+.as-skel {
+  background: linear-gradient(
+    90deg,
+    var(--as-surface) 0%,
+    var(--as-surface-2) 50%,
+    var(--as-surface) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: 6px;
+  animation: as-skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes as-skel-shimmer {
+  from { background-position: -100% 0; }
+  to   { background-position: 100% 0; }
+}
+
+/* ───── Custom scrollbars (dark-themed) ─────
+   The default OS scrollbar (light on macOS, gunmetal on Win11) clashes
+   with the dark surface. Thin, surface-coloured, hover-reveal. */
+.as-scroll::-webkit-scrollbar,
+.as-modal::-webkit-scrollbar,
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--as-surface-2);
+  border-radius: 999px;
+  border: 2px solid var(--as-bg);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--as-line-2); }
+* { scrollbar-color: var(--as-surface-2) transparent; scrollbar-width: thin; }
+
+/* ───── Animation utilities ─────
+   Drop on container to stagger children into view on mount. */
+.as-stagger > * { animation: as-rise 280ms var(--as-ease) both; }
+.as-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.as-stagger > *:nth-child(2) { animation-delay: 40ms; }
+.as-stagger > *:nth-child(3) { animation-delay: 80ms; }
+.as-stagger > *:nth-child(4) { animation-delay: 120ms; }
+.as-stagger > *:nth-child(5) { animation-delay: 160ms; }
+.as-stagger > *:nth-child(6) { animation-delay: 200ms; }
+.as-stagger > *:nth-child(n+7) { animation-delay: 240ms; }
+
+/* ───── Selection ───── */
+::selection { background: var(--as-accent-soft); color: var(--as-ink); }

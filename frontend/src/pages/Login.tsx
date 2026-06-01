@@ -89,55 +89,23 @@ export function Login() {
 
   return (
     <div className="as-login">
-      <div className="as-login-card" style={{ textAlign: "center" }}>
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 14,
-            background: "var(--as-accent)",
-            color: "#04140e",
-            display: "grid",
-            placeItems: "center",
-            margin: "0 auto 18px",
-            fontSize: 24,
-            fontWeight: 800,
-          }}
-        >
-          A
+      <div className="as-login-card">
+        <div className="as-login-brand" aria-hidden>A</div>
+        <div className="as-login-eyebrow">Arclap Station</div>
+        <h2 className="as-login-title">Enter PIN</h2>
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <div className="as-login-host">
+            <span className="dot" /> {window.location.host}
+          </div>
         </div>
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--as-ink-3)",
-            textTransform: "uppercase",
-            letterSpacing: 0.08,
-            fontWeight: 700,
-            marginBottom: 6,
-          }}
-        >
-          Arclap Station
-        </div>
-        <h2 style={{ margin: "0 0 6px", fontSize: 22, fontWeight: 700, letterSpacing: "-0.01em" }}>Enter PIN</h2>
-        <div style={{ fontSize: 12.5, color: "var(--as-ink-3)", marginBottom: 24 }}>
-          {window.location.host}
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 14 }}>
+        <div className="as-pin-row">
           {[0, 1, 2, 3, 4, 5].map((i) => (
             <input
               key={i}
               ref={(el) => {
                 refs.current[i] = el;
               }}
-              className="as-input mono"
-              style={{
-                width: 46,
-                height: 56,
-                fontSize: 22,
-                textAlign: "center",
-                padding: 0,
-                borderColor: error ? "var(--as-bad)" : undefined,
-              }}
+              className={`as-pin-input${error && lockoutLeft === 0 ? " err" : ""}`}
               maxLength={1}
               type="password"
               inputMode="numeric"
@@ -150,23 +118,17 @@ export function Login() {
             />
           ))}
         </div>
-        {lockoutLeft > 0 && (
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--as-warn)",
-              marginBottom: 10,
-              fontVariantNumeric: "tabular-nums",
-            }}
-            role="alert"
-          >
+        {lockoutLeft > 0 ? (
+          <div className="as-login-msg warn" role="alert" style={{ fontVariantNumeric: "tabular-nums" }}>
             Locked out · retry in {Math.floor(lockoutLeft / 60)}m {lockoutLeft % 60}s
           </div>
+        ) : error ? (
+          <div className="as-login-msg err">{error}</div>
+        ) : login.isPending ? (
+          <div className="as-login-msg dim">Verifying…</div>
+        ) : (
+          <div className="as-login-msg dim">6-digit numeric PIN</div>
         )}
-        {error && lockoutLeft === 0 && (
-          <div style={{ fontSize: 12, color: "var(--as-bad)", marginBottom: 10 }}>{error}</div>
-        )}
-        {login.isPending && <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Verifying…</div>}
       </div>
     </div>
   );
