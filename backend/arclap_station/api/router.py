@@ -15,6 +15,7 @@ from arclap_station.api.home import router as home_router
 from arclap_station.api.queue import router as queue_router
 from arclap_station.api.schedule import router as schedule_router
 from arclap_station.api.settings import router as settings_router
+from arclap_station.api.system import router as system_router
 from arclap_station.api.terminal import router as terminal_router
 from arclap_station.setup_wizard import router as setup_router
 
@@ -32,6 +33,7 @@ def build_router() -> APIRouter:
     root.include_router(queue_router)
     root.include_router(terminal_router)
     root.include_router(settings_router)
+    root.include_router(system_router)
     root.include_router(acceptance_router)
     root.include_router(diag_router)
     return root

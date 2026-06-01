@@ -3,12 +3,37 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { Button } from "../../../components/Button";
 import { Pill } from "../../../components/Pill";
+import { apiFetch } from "../../../lib/api";
 import { settings } from "../../../lib/bridge/settings";
+
+interface UpdateCheck {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  reachable: boolean;
+  releases_url: string;
+}
 
 export function System() {
   const { data } = useQuery({ queryKey: ["settings.system"], queryFn: settings.system });
   const [modal, setModal] = useState<"reboot" | "factory" | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [update, setUpdate] = useState<UpdateCheck | null>(null);
+
+  const checkUpdate = useMutation({
+    mutationFn: () => apiFetch<UpdateCheck>("/system/update/check"),
+    onSuccess: (r) => {
+      setUpdate(r);
+      showToast(
+        !r.reachable
+          ? "Couldn't reach GitHub — check connectivity"
+          : r.update_available
+            ? `Update available: ${r.latest}`
+            : "You're on the latest version",
+      );
+    },
+    onError: (e) => showToast(e instanceof Error ? e.message : String(e)),
+  });
 
   const restart = useMutation({
     mutationFn: () => settings.restart("arclap-station"),
@@ -43,11 +68,41 @@ export function System() {
         <Row label="Watchdog" val={data.hardware.watchdog} />
       </div>
       <div className="as-card">
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Firmware</div>
-        <Row label="Current" val={data.firmware.current} mono />
-        <Row label="Channel" val={data.firmware.channel} />
-        <Row label="Last check" val={data.firmware.last_check} />
-        <Row label="Available" val={data.firmware.available} />
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Software</div>
+        <Row label="Running" val={update?.current ?? data.firmware.current} mono />
+        <Row
+          label="Latest on GitHub"
+          val=""
+          customVal={
+            update
+              ? update.reachable
+                ? <Pill tone={update.update_available ? "warn" : "ok"}>
+                    {update.latest ?? "—"}{update.update_available ? " · update" : " · current"}
+                  </Pill>
+                : <Pill tone="gray">offline</Pill>
+              : <span style={{ color: "var(--as-ink-4)", fontSize: 12 }}>not checked</span>
+          }
+        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+          <Button onClick={() => checkUpdate.mutate()} disabled={checkUpdate.isPending}>
+            {checkUpdate.isPending ? "Checking…" : "Check for updates"}
+          </Button>
+          {update?.update_available && (
+            <div style={{ fontSize: 11.5, color: "var(--as-ink-3)", lineHeight: 1.55 }}>
+              To update, SSH to the Pi and run the documented installer:
+              <div className="mono" style={{
+                marginTop: 6, padding: "8px 10px", background: "var(--as-bg-2)",
+                border: "1px solid var(--as-line)", borderRadius: 6, fontSize: 11,
+                wordBreak: "break-all", color: "var(--as-ink-2)",
+              }}>
+                curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh | sudo bash
+              </div>
+              <a href={update.releases_url} target="_blank" rel="noreferrer" className="as-link" style={{ marginTop: 6, display: "inline-block" }}>
+                View changes on GitHub →
+              </a>
+            </div>
+          )}
+        </div>
       </div>
       <div className="as-card">
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 14 }}>Cloud pairing</div>

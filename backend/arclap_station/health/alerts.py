@@ -60,8 +60,18 @@ def write_state(result: dict[str, Any]) -> None:
 
 
 def _station_summary() -> dict[str, Any]:
-    """Compact identity + activity snapshot included in alerts/heartbeats."""
+    """Compact identity + activity snapshot included in alerts/heartbeats.
+
+    This is the per-station payload a fleet dashboard ingests — identity,
+    running version, and headline activity. The version lets the fleet
+    side spot stations that are behind on updates."""
     out: dict[str, Any] = {}
+    try:
+        from arclap_station import __version__  # noqa: PLC0415
+
+        out["version"] = __version__
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from arclap_station.station_config import get_station_store  # noqa: PLC0415
 
