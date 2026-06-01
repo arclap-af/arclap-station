@@ -12,24 +12,41 @@ It's Python/FastAPI + Vite/React + TypeScript, designed to be flashed once and f
 
 ## 1. What it is
 
-A self-contained device controller you flash onto an SD card and put on a shelf. It survives 2-year unattended construction-site deployments. Current release: **v0.8.x**.
+A self-contained device controller you flash onto an SD card and put on a shelf. It survives 2-year unattended construction-site deployments and is built to self-heal from any single fault without a human. Current release: **v0.9.2**.
 
 **Capture + cockpit**
-- A **10-step setup wizard** (Wi-Fi, time, login, camera, schedule, destinations, acceptance).
-- A **real-time MJPEG viewfinder** with RGB histogram, edge-clipping indicators, and a mirror lock-up button.
+- A **10-step setup wizard** (Wi-Fi, time, login, camera, schedule, destinations, pairing, acceptance).
+- A **still-image camera page**: a big Capture button plus a preview of the last shot with its EXIF — no live MJPEG (deliberately dropped; the station is a capture device, not a viewfinder).
 - The camera page uses **real gphoto2 choices** for ISO / shutter / aperture chips — no hardcoded lists.
-- **APScheduler** for time-lapse, single-shot bursts, and event-driven captures, persisted across reboots.
-- **EXIF auto-rotate + optional watermark** on every capture (serial · site · UTC timestamp).
+- **APScheduler** for time-lapse and interval captures (1 min – 24 h), with active-hours, day-of-week, per-schedule destination routing, and a "keep local copy" toggle — persisted across reboots.
+- **EXIF auto-rotate + watermark on by default** on every capture (serial · site · UTC timestamp) for legal/insurance proof.
 - **Perceptual-hash (dHash) deduplication** drops near-identical frames in a 10-min window — opt-in via `dedup_threshold`.
 - **Daily pre-rendered timelapse MP4s** rendered by ffmpeg at 03:30 — the strategic retention asset.
 
-**Reliability layers (camera A–I, v0.5)**
+**Camera reliability (A–K)**
 - USB autosuspend off for 8 camera vendors (Canon / Nikon / Sony / Fuji / Olympus / Panasonic / Pentax / Leica) via udev.
-- Auto-power-off disabled on the body via PTP after init.
+- Auto-power-off disabled on the body via PTP after init; a **3-min keepalive poll** holds the PTP session awake between scheduled captures.
+- `char-usb_device` cgroup grant (the fix for the silent `-7 I/O problem` under systemd hardening).
+- An `RLock` serialises all libgphoto2 access so concurrent cockpit requests can't race `Camera().init()`.
 - Init retry with 1s / 3s / 10s backoff; pre-capture wake probe; capture target = SDRAM (never CF/SD card).
-- Cross-process **camera health beacon**; 15s grace after USB reset; firmware-lockup detection.
+- Recovery ladder for a wedged camera: reconnect → `/sys` re-authorize → **USB bus power-cycle** (`uhubctl`, if a switchable hub is fitted) → service self-restart after N consecutive init failures.
+- Cross-process **camera health beacon**; 15s grace after USB reset; firmware-lockup + flap detection.
 - 45s in-thread capture timeout via `threading.Timer` (respects libgphoto2 thread affinity).
-- **Fail-fast adapter** (v0.6): camera API endpoints return in ms (not 20s) when the camera is unplugged.
+- **Fail-fast adapter**: camera API endpoints return in ms (not 20s) when the camera is unplugged.
+
+**Stability & self-recovery (v0.9)**
+- **Software watchdog**: `WatchdogSec=60` + sd_notify pings from the asyncio loop — a *hang* (not just a crash) is killed + restarted within 60s.
+- **Pi hardware watchdog** (`RuntimeWatchdogSec=15`): reboots the box if systemd/kernel itself hangs.
+- **Corrupt-boot self-heal**: on boot, `state.db` integrity is checked and auto-restored from the newest nightly backup if corrupt (the corrupt file is preserved aside).
+- **UPS HAT support** (graceful, auto-detected): clean shutdown below 12% on battery to prevent SD corruption.
+- **SD-card longevity**: journald size-capped + root mounted `noatime` to cut write wear.
+
+**Health & observability (v0.9)**
+- **Self-test** (`/api/health/selftest`): 8 fail-soft probes (camera, storage, clock, destinations, queue, temp, memory, power) → overall ok/warn/bad + 0–100 score, each with a plain-English fix hint. Surfaced in **Settings → Health**.
+- **Proactive alerting**: POSTs to a configurable webhook on health degrade/recover + a periodic **fleet heartbeat** (so a silent station is detectable by the absence of a beat).
+- **Activity tab**: the audit-log timeline (every capture, upload, schedule, login, system event), filterable.
+- **Fleet station-card** (`/api/system/info`) + read-only **GitHub update-check** (`/api/system/update/check`).
+- **Resilience acceptance group**: verifies — non-destructively — that both watchdogs are armed, backups are restorable, DB integrity holds, indexes are present, and `noatime` is mounted.
 
 **Storage + retention**
 - **4-tier retention sweep** (HOT 7d / WARM 30d / COLD 90d / archive) with emergency mode at >95% disk.
@@ -39,8 +56,10 @@ A self-contained device controller you flash onto an SD card and put on a shelf.
 - SQLite tuned: WAL, busy_timeout=5s, synchronous=NORMAL, 32MB cache, 64MB mmap, 15-min periodic checkpoint.
 
 **Uploaders**
-- Multi-destination queue with retries: S3 · SFTP · Dropbox · HTTPS webhook · local · MQTT.
-- **Fernet-AEAD encryption** of destination secrets at rest.
+- Multi-destination queue with retries: S3 · SFTP · FTP/FTPS · HTTPS webhook · local · MQTT (+ Arclap Cloud).
+- **Fernet-AEAD encryption** of destination secrets at rest; edits never clobber a stored secret (redacted-sentinel guard).
+- Probes are tuned for real intakes: FTP/S3/webhook test with a `.jpg` body, skip RETR, best-effort DELETE.
+- **Orphan rescue**: photos captured before any destination existed are auto-queued the moment one is added.
 - **Circuit breaker** pauses the queue for 5 min when every destination has failed 10× in the last hour.
 
 **Networking**
@@ -75,7 +94,7 @@ A self-contained device controller you flash onto an SD card and put on a shelf.
 - **Help tooltips** with doc deep-links.
 - **Mobile-responsive CSS**: ≤900 px (tablet, 44 px tap targets) and ≤600 px (phone, full-screen modals, viewfinder vh cap). `prefers-reduced-motion` + `pointer:coarse` honored.
 
-Everything is in two repos: backend (`backend/arclap_station` — 66 .py files) and frontend (`frontend/` — Vite + React 18 + TypeScript). The deployment layer turns those into a one-curl install on a fresh Pi.
+Everything is in one monorepo: backend (`backend/arclap_station` — 75 .py files) and frontend (`frontend/` — Vite + React 18 + TypeScript). The deployment layer turns those into a one-curl install on a fresh Pi.
 
 ---
 
@@ -91,7 +110,7 @@ Pin a specific release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh \
-  | sudo ARCLAP_VERSION=v0.8.0 bash
+  | sudo ARCLAP_VERSION=v0.9.2 bash
 ```
 
 Alternative (offline / from a cloned repo):
@@ -139,16 +158,14 @@ Open the URL on a laptop on the same LAN. Trust the self-signed certificate. Wal
 
 ```
 /opt/arclap-station/
-├── venv/                       Python 3.11 virtualenv with the wheel
-├── releases/                   side-by-side staging for atomic updates
-└── wheels/                     downloaded artifacts kept for diagnostics
+└── venv/                       Python 3.14 virtualenv with the installed package
 
 /var/www/arclap/                Static frontend bundle (served by Caddy)
-/etc/arclap/                    auth.json · station.json · destinations/*
-/var/lib/arclap/                state.db · scheduler.db · audit.db · thumbnails/
+/etc/arclap/                    auth.json · station.json · destinations/* · dest.key
+/var/lib/arclap/                state.db (incl. audit_log) · scheduler.db · backups/ ·
+                                thumbnails/ · local-photos/ · *_health.json beacons
 /media/sdcard/photos/           Captures (the only path Caddy never serves)
-/var/log/arclap/                Rotated log copies (journald is canonical)
-/run/arclap-station.sock        UNIX socket Caddy talks to
+/var/log/arclap/                Diagnostics dumps (journald is canonical, size-capped)
 ```
 
 ### Architecture (Mermaid)
@@ -161,9 +178,8 @@ flowchart LR
     subgraph PI5["Raspberry Pi 5 (StationOS)"]
         SD[(SD card)] -.boot.-> Sysd[systemd]
         Sysd --> Caddy[Caddy :443<br/>tls internal + HSTS]
-        Sysd --> Socket[(/run/arclap-station.sock)]
-        Caddy --> Socket
-        Socket --> Uvicorn[Uvicorn workers]
+        Sysd --> Uvicorn[Uvicorn<br/>127.0.0.1:8080]
+        Caddy --> Uvicorn
         Uvicorn --> API[FastAPI]
         API --> CAM[Camera adapter<br/>libgphoto2]
         API --> SCH[APScheduler]
@@ -180,13 +196,13 @@ flowchart LR
 ### ASCII overview
 
 ```
-[ Laptop browser ] ──HTTPS──▶ [ Caddy :443 ] ──UDS──▶ [ FastAPI ] ──libgphoto2──▶ [ DSLR ]
-                                  │                       │
+[ Laptop browser ] ──HTTPS──▶ [ Caddy :443 ] ──127.0.0.1:8080──▶ [ FastAPI ] ──libgphoto2──▶ [ DSLR ]
+                                  │                                   │
                                   └── static (/var/www/arclap)
-                                                          │
-                                                          ├─▶ SQLite (/var/lib/arclap)
-                                                          ├─▶ Photos (/media/sdcard/photos)
-                                                          └─▶ Uploader worker ──▶ S3 / SFTP / …
+                                                                      │
+                                                                      ├─▶ SQLite (/var/lib/arclap)
+                                                                      ├─▶ Photos (/media/sdcard/photos)
+                                                                      └─▶ Uploader worker ──▶ S3 / SFTP / …
 ```
 
 ---
@@ -298,44 +314,64 @@ sudo systemctl status arclap-station
 sudo journalctl -u arclap-station -n 50
 ```
 
-Caddy listens on 443; arclap-station listens on `/run/arclap-station.sock`. If Caddy is up but the service is down, the watchdog should already be restarting it — look at `/run/arclap-watchdog.fail`.
+Caddy listens on 443 and reverse-proxies to arclap-station on `127.0.0.1:8080`. If Caddy is up but the service is down, systemd (`Restart=always` + the software watchdog) should already be restarting it — check `systemctl status arclap-station` and `Settings → Health`.
 
 ### Captures succeed but uploads stall
 
+The uploader runs **in-process** inside `arclap-station` (there is no separate
+`arclap-uploader` service). Check the queue + destination state:
+
 ```bash
-sudo systemctl status arclap-uploader
-sudo journalctl -u arclap-uploader -n 50
+sudo journalctl -u arclap-station -n 80 | grep -iE 'upload|queue|dest'
 ls -la /etc/arclap/destinations
 ```
 
-Each destination has its own retry/backoff and is independently failable. The cockpit's Destinations panel shows the live queue depth.
+Each destination has its own retry/backoff and is independently failable. The
+cockpit's **Destinations** panel shows live queue depth + per-destination
+errors, and **Settings → Health** flags a stalled queue with a fix hint.
 
 ---
 
 ## 8. Updating
 
-```bash
-sudo arclap-station update
-```
-
-The installer pulls the latest release artifacts, stages a new venv under `/opt/arclap-station/releases/<timestamp>/venv`, atomic-renames the symlink, and restarts the service over its activation socket. In-flight HTTPS connections survive because Caddy holds the socket. Captures pause for ~1 s and resume on the next scheduler tick.
-
-Pin a specific version:
+The cockpit's **Settings → System → Software** card checks GitHub for a newer
+release (read-only) and shows whether you're behind. To apply an update,
+re-run the installer over SSH — it pulls the latest `main`, reinstalls the
+package + frontend bundle, and restarts the service:
 
 ```bash
-sudo ARCLAP_VERSION=v0.2.0 arclap-station update
+curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh | sudo bash
 ```
+
+Captures pause for ~3 s during the service restart and resume on the next
+scheduler tick. The boot-time integrity guard protects `state.db` if power is
+lost mid-update.
+
+> Note: there is intentionally no auto-apply / in-place self-update on the
+> device yet — a hands-off A/B-rollback OTA is a StationOS-image phase that
+> needs a test rig, not the live production Pi. The update-check above tells
+> you *when* to run the installer; you stay in control of *when* it happens.
 
 ---
 
 ## 9. Uninstall
 
+Stop + disable the units and remove the install tree (state, photos, and config
+under `/var/lib/arclap`, `/media/sdcard/photos`, `/etc/arclap` are left in place
+so you don't lose data by accident):
+
 ```bash
-sudo arclap-station uninstall            # preserves /var/lib/arclap and /media/sdcard/photos
-sudo arclap-station uninstall --purge    # deletes state + photos
+sudo systemctl disable --now arclap-station caddy \
+  arclap-backup.timer arclap-retention.timer arclap-camera-watchdog.timer
+sudo rm -rf /opt/arclap-station /var/www/arclap
+sudo rm -f /etc/systemd/system/arclap-*.{service,timer} \
+  /etc/systemd/system.conf.d/10-arclap-watchdog.conf \
+  /etc/systemd/journald.conf.d/10-arclap.conf
+sudo systemctl daemon-reload
 ```
 
-Refuses to delete photos unless `--purge` is passed.
+To also wipe data: `sudo rm -rf /var/lib/arclap /etc/arclap /media/sdcard/photos`.
+The cleanest reset for a field unit, though, is to re-flash the SD card.
 
 ---
 
@@ -345,11 +381,8 @@ Refuses to delete photos unless `--purge` is passed.
 # Live tail of everything Arclap.
 sudo journalctl -fu 'arclap-*'
 
-# Just the API service.
+# Just the API service (camera, scheduler, uploader all run in-process here).
 sudo journalctl -fu arclap-station
-
-# Just the uploader.
-sudo journalctl -fu arclap-uploader
 
 # Last boot's logs (after a crash).
 sudo journalctl -u arclap-station -b -1 --no-pager
@@ -393,7 +426,7 @@ To build the Pi OS image, push a tag — CI runs pi-gen and attaches `arclap-sta
 
 ## 12. Security model + threat model
 
-In one paragraph: the Pi is treated as a hostile host on a hostile network. The cockpit is bound to a UDS that only Caddy can reach (the `arclap` user owns the socket, the `arclap` group can read it). Caddy fronts 443 with a self-signed certificate; HSTS is set to a year so a downgrade attack would have to break the user's prior trust on the first visit. The wheel runs under the `arclap` user with strict systemd hardening (`ProtectSystem=strict`, `ProtectHome=true`, `NoNewPrivileges=true`, an empty `CapabilityBoundingSet`, and a `@system-service` syscall filter). The PTY terminal is gated by login + a command allowlist. Captures live on `/media/sdcard/photos`; the API never serves the raw filesystem — only thumbnails through a path-validated handler. Credentials for destinations are stored under `/etc/arclap/destinations/*.json` with mode 0640, with secrets that support it kept in the kernel keyring via `python-keyring`. All admin actions emit immutable rows into `/var/lib/arclap/audit.db`.
+In one paragraph: the Pi is treated as a hostile host on a hostile network. The cockpit binds **loopback TCP `127.0.0.1:8080`** — only reachable from the Pi itself — and Caddy reverse-proxies 443 to it with a self-signed certificate; HSTS is set to a year so a downgrade attack would have to break the user's prior trust on the first visit. The service runs under the `arclap` user with strict systemd hardening (`ProtectSystem=strict`, `ProtectHome=true`, `NoNewPrivileges=true`, an empty `CapabilityBoundingSet`, `RestrictNamespaces`, and a `@system-service @sandbox` syscall filter; `DeviceAllow=char-usb_device rw` is the only device grant). The PTY terminal is gated by login + a command allowlist. Captures live on `/media/sdcard/photos`; the API never serves the raw filesystem — only thumbnails through a path-validated handler. Destination secrets are encrypted at rest with **Fernet** (key from the kernel keyring, or a 0600 `/etc/arclap/dest.key` fallback on a headless Pi). All admin actions emit immutable, hash-chained rows into the `audit_log` table in `/var/lib/arclap/state.db` (signed export available).
 
 See [`docs/threat-model.md`](docs/threat-model.md) for the long form.
 
