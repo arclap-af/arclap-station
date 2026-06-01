@@ -91,15 +91,80 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     wal_task = asyncio.create_task(_wal_checkpoint_loop())
 
+    # Periodic self-test → alert-on-transition + UPS safe-shutdown check.
+    # This is the station's "am I OK, and tell someone if not" heartbeat.
+    # Runs every 5 min; the first run is delayed 60s so startup settles
+    # (camera enumerate, queue drain) before the first verdict.
+    async def _health_loop() -> None:
+        from arclap_station.health.selftest import run_selftest  # noqa: PLC0415
+        from arclap_station.health import alerts as _alerts  # noqa: PLC0415
+
+        await asyncio.sleep(60)
+        while True:
+            try:
+                result = await asyncio.to_thread(run_selftest)
+                _alerts.evaluate_and_alert(result)
+                # Safe-shutdown check piggybacks on the health cadence.
+                try:
+                    from arclap_station.hardware.ups import maybe_safe_shutdown  # noqa: PLC0415
+                    await asyncio.to_thread(maybe_safe_shutdown)
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("ups shutdown check failed: %s", exc)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("health loop iteration failed: %s", exc)
+            await asyncio.sleep(300)
+
+    health_task = asyncio.create_task(_health_loop())
+
+    # Fleet heartbeat — periodic "alive + summary" POST so a silent
+    # station is detectable from the fleet side. Honours the operator's
+    # configured interval; no-op when disabled or no webhook set.
+    async def _heartbeat_loop() -> None:
+        from arclap_station.health import alerts as _alerts  # noqa: PLC0415
+        from arclap_station.station_config import get_station_store  # noqa: PLC0415
+
+        while True:
+            try:
+                cfg = get_station_store().load()
+                interval = max(5, int(getattr(cfg, "heartbeat_interval_min", 60)))
+                if getattr(cfg, "heartbeat_enabled", False) and getattr(cfg, "alert_webhook", None):
+                    await asyncio.to_thread(_alerts.send_heartbeat)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("heartbeat loop failed: %s", exc)
+                interval = 60
+            await asyncio.sleep(interval * 60)
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+    # Camera keepalive — poke an existing PTP session every 3 min so the
+    # DSLR doesn't sleep itself off the USB bus between scheduled
+    # captures. No-op when no handle exists (mock camera, or camera
+    # genuinely absent) — it never forces an init.
+    async def _keepalive_loop() -> None:
+        from arclap_station.camera.adapter import get_adapter  # noqa: PLC0415
+
+        await asyncio.sleep(120)
+        while True:
+            try:
+                await asyncio.to_thread(get_adapter().keepalive)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("camera keepalive failed: %s", exc)
+            await asyncio.sleep(180)
+
+    keepalive_task = asyncio.create_task(_keepalive_loop())
+
     log.info("arclap-station started — etc=%s var=%s", settings.paths.etc, settings.paths.var)
     try:
         yield
     finally:
-        wal_task.cancel()
-        try:
-            await wal_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        _bg_tasks = (wal_task, health_task, heartbeat_task, keepalive_task)
+        for _t in _bg_tasks:
+            _t.cancel()
+        for _t in _bg_tasks:
+            try:
+                await _t
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         try:
             if mqtt is not None:
                 mqtt.stop()

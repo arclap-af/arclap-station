@@ -95,6 +95,8 @@ def _build_snapshot() -> dict[str, Any]:
         metrics.get("uptime_seconds", 0),
     )
 
+    ups = _read_ups_safe()
+
     return {
         **metrics,
         "version": _version,
@@ -130,8 +132,25 @@ def _build_snapshot() -> dict[str, Any]:
         "destinations_ok": destinations_ok,
         "destinations_warn": destinations_warn,
         "destinations_total": len(dests),
+        # UPS telemetry — null on a wired station with no HAT fitted,
+        # which the cockpit renders as "no UPS". When a UPS HAT is
+        # present the reader returns a real percent + on-battery flag.
+        "ups_pct": ups.get("percent") if ups else None,
+        "ups_status": (
+            ("on battery" if ups.get("on_battery") else "mains") if ups else None
+        ),
         "ts": now.isoformat(),
     }
+
+
+def _read_ups_safe() -> dict[str, Any] | None:
+    try:
+        from arclap_station.hardware.ups import read_ups  # noqa: PLC0415
+
+        ups = read_ups()
+        return ups if ups.get("present") else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _derive_status(

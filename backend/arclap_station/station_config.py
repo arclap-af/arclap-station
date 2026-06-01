@@ -29,6 +29,10 @@ class StationConfig:
     project_ends_at: str | None = None   # ISO8601, photos auto-purge N days after
     bandwidth_kbps: int | None = None    # per-station upload rate cap (None = unlimited)
     dedup_threshold: int | None = None   # 0–10 Hamming dist; None = dedup off
+    # v0.9 health/observability:
+    alert_webhook: str | None = None     # POST target for health alerts + heartbeats
+    heartbeat_enabled: bool = False      # send periodic "alive + summary" POSTs
+    heartbeat_interval_min: int = 60     # how often, when enabled (minutes)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

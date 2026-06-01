@@ -10,6 +10,7 @@ from arclap_station.api.camera import router as camera_router
 from arclap_station.api.destinations import router as destinations_router
 from arclap_station.api.diag import router as diag_router
 from arclap_station.api.gallery import router as gallery_router
+from arclap_station.api.health_api import router as health_router
 from arclap_station.api.home import router as home_router
 from arclap_station.api.queue import router as queue_router
 from arclap_station.api.schedule import router as schedule_router
@@ -23,6 +24,7 @@ def build_router() -> APIRouter:
     root.include_router(auth_router)
     root.include_router(setup_router)
     root.include_router(home_router)
+    root.include_router(health_router)
     root.include_router(camera_router)
     root.include_router(gallery_router)
     root.include_router(schedule_router)

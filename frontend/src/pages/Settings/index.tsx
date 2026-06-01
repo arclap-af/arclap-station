@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Activity } from "./tabs/Activity";
 import { Diagnostics } from "./tabs/Diagnostics";
 import { General } from "./tabs/General";
+import { Health } from "./tabs/Health";
 import { Network } from "./tabs/Network";
 import { Security } from "./tabs/Security";
 import { Storage } from "./tabs/Storage";
@@ -11,6 +12,9 @@ import { Logs } from "./tabs/Logs";
 
 const TABS = [
   { id: "general", label: "General", Component: General },
+  // Health = the live self-test + alert config. Placed early — it's
+  // the "is this station OK and who gets told if not" surface.
+  { id: "health", label: "Health", Component: Health },
   { id: "network", label: "Network", Component: Network },
   { id: "security", label: "Security", Component: Security },
   { id: "storage", label: "Storage", Component: Storage },

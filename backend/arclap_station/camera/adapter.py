@@ -99,6 +99,16 @@ class CameraAdapter:
         with self._lock:
             self._backend.close()
 
+    def keepalive(self) -> bool:
+        """Poke the camera to keep its PTP session warm between captures.
+        No-op (returns False) for backends that don't implement it
+        (e.g. the mock)."""
+        fn = getattr(self._backend, "keepalive", None)
+        if fn is None:
+            return False
+        with self._lock:
+            return bool(fn())
+
     @staticmethod
     def _default_capture_dir() -> Path:
         now = datetime.now(UTC)
@@ -251,17 +261,27 @@ class _GPhoto2Backend:
                     if attempt < len(backoff) and wait > 0:
                         _t.sleep(wait)
             # All attempts exhausted. Bump the consecutive-failure
-            # counter and, if we're past the threshold, self-restart
-            # to clear any wedged libgphoto2 state. The check stays
-            # inside the lock so two concurrent failures can't both
-            # trip the threshold.
+            # counter. Recovery escalation ladder at the threshold:
+            #   1. USB bus power-cycle (uhubctl) — fixes a wedged camera
+            #      USB controller without losing the service. No-op if
+            #      no power-switchable hub / uhubctl present.
+            #   2. Service self-restart — clears wedged libgphoto2 state
+            #      in our own address space.
+            # The check stays inside the lock so two concurrent failures
+            # can't both trip the threshold.
             assert last_exc is not None
             self._consecutive_init_failures += 1
             if (
                 self._consecutive_init_failures
                 >= self.MAX_CONSECUTIVE_INIT_FAILURES
             ):
-                self._trigger_service_restart(last_exc)
+                if self._try_usb_power_cycle():
+                    # Power-cycle ran — reset the counter and let the
+                    # next ensure() re-probe the freshly-reset bus
+                    # instead of immediately self-restarting.
+                    self._consecutive_init_failures = 0
+                else:
+                    self._trigger_service_restart(last_exc)
             raise last_exc
 
     def _after_init(self, cam: Any) -> None:
@@ -318,6 +338,48 @@ class _GPhoto2Backend:
                 pass
         self._cam = None
         self._configured = False
+
+    # ---- keepalive (K) ---------------------------------------------------
+
+    def keepalive(self) -> bool:
+        """Keep an existing PTP session warm so the camera doesn't sleep
+        between scheduled captures.
+
+        Only acts when a live handle already exists — it does NOT force
+        an init (that's _ensure's job and would fight a genuinely-absent
+        camera). A cheap battery-level read is enough to reset the
+        body's idle timer. Serialised by the lock so it never collides
+        with a capture. Returns True if the keepalive poll succeeded.
+        """
+        with self._lock:
+            if self._cam is None:
+                return False
+            try:
+                _safe_config(self._cam, self._gp, "/main/status/batterylevel")
+                return True
+            except Exception:  # noqa: BLE001
+                # A failed keepalive means the session went stale; drop
+                # the handle so the next _ensure() rebuilds it cleanly.
+                self._drop_handle()
+                return False
+
+    def _try_usb_power_cycle(self) -> bool:
+        """Attempt a hardware USB power-cycle to recover a wedged camera.
+
+        Drops our handle first (so we're not holding a dead fd across
+        the power cut), then asks the usbhub helper to cycle bus power.
+        Returns True only if a power-cycle actually ran (i.e. uhubctl +
+        a switchable hub are present). False → caller falls back to the
+        service self-restart.
+        """
+        try:
+            from arclap_station.hardware.usbhub import power_cycle_usb  # noqa: PLC0415
+
+            self._drop_handle()
+            return power_cycle_usb()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("usb power-cycle attempt failed: %s", exc)
+            return False
 
     # ---- stuck-camera self-restart (J) -----------------------------------
 

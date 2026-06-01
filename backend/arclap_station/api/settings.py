@@ -55,6 +55,56 @@ async def update_general(
     return cfg.to_dict()
 
 
+class AlertsUpdateRequest(BaseModel):
+    # `alert_webhook` accepts empty string to clear; None means "leave
+    # alone", so we can't use exclude_none for this one field.
+    alert_webhook: str | None = None
+    clear_webhook: bool = False
+    heartbeat_enabled: bool | None = None
+    heartbeat_interval_min: int | None = Field(default=None, ge=5, le=1440)
+
+
+@router.get("/alerts")
+async def get_alerts(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
+    cfg = get_station_store().load()
+    return {
+        "alert_webhook": getattr(cfg, "alert_webhook", None),
+        "heartbeat_enabled": getattr(cfg, "heartbeat_enabled", False),
+        "heartbeat_interval_min": getattr(cfg, "heartbeat_interval_min", 60),
+    }
+
+
+@router.put("/alerts")
+async def update_alerts(
+    payload: AlertsUpdateRequest,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Configure the health alert webhook + heartbeat. The webhook
+    receives degrade/recover alerts and (if enabled) periodic
+    heartbeats — point it at a Slack/Teams/Make.com/custom endpoint
+    so a sick or silent station surfaces without anyone opening the
+    cockpit."""
+    fields: dict[str, Any] = {}
+    if payload.clear_webhook:
+        fields["alert_webhook"] = None
+    elif payload.alert_webhook is not None:
+        fields["alert_webhook"] = payload.alert_webhook.strip() or None
+    if payload.heartbeat_enabled is not None:
+        fields["heartbeat_enabled"] = payload.heartbeat_enabled
+    if payload.heartbeat_interval_min is not None:
+        fields["heartbeat_interval_min"] = payload.heartbeat_interval_min
+    cfg = get_station_store().update(**fields)
+    audit_emit("user", "settings.alerts.update", {
+        "webhook_set": bool(getattr(cfg, "alert_webhook", None)),
+        "heartbeat_enabled": getattr(cfg, "heartbeat_enabled", False),
+    })
+    return {
+        "alert_webhook": getattr(cfg, "alert_webhook", None),
+        "heartbeat_enabled": getattr(cfg, "heartbeat_enabled", False),
+        "heartbeat_interval_min": getattr(cfg, "heartbeat_interval_min", 60),
+    }
+
+
 @router.get("/network")
 async def network_info(_: dict[str, Any] = Depends(require_session)) -> dict[str, Any]:
     """Real interface state from psutil + sysfs (Pi 5 specific).

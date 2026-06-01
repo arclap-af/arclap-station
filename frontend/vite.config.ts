@@ -44,6 +44,20 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     target: "es2022",
+    // Split the heavy, rarely-changing vendor libs into their own
+    // chunks. Before this everything was one 712KB bundle, re-fetched
+    // in full on every deploy; now the React/router/query/xterm vendor
+    // chunks stay cached across cockpit updates, so an upgrade only
+    // re-downloads the small app chunk over site wifi.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          "vendor-query": ["@tanstack/react-query"],
+          "vendor-term": ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-web-links"],
+        },
+      },
+    },
   },
   server: {
     port: 5173,
