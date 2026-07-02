@@ -107,7 +107,7 @@ def _destination_metrics(dest_id: str) -> dict[str, int]:
         try:
             bytes_today = conn.execute(
                 """
-                SELECT COALESCE(SUM(p.bytes), 0)
+                SELECT COALESCE(SUM(p.size_bytes), 0)
                 FROM upload_queue q
                 JOIN photos p ON p.id = q.photo_id
                 WHERE q.dest_id=?
@@ -126,19 +126,40 @@ def _destination_metrics(dest_id: str) -> dict[str, int]:
     }
 
 
+# Explicit secret keys (covers the *_pem names that don't contain an
+# obvious secret substring). The cockpit forms also write shorter
+# aliases (secret_key, access_key, private_key) that the old exact-match
+# list missed — leaking AWS secret keys, SSH private keys and webhook
+# auth headers to the browser. We now redact by a predicate that errs
+# toward redacting: over-redacting a benign field is harmless (it's
+# restored on save), under-redacting leaks a credential.
 _REDACT_KEYS = {
     "password",
     "secret",
+    "secret_key",
     "secret_access_key",
+    "access_key",
     "access_key_id",
     "token",
     "hmac_secret",
+    "private_key",
     "private_key_pem",
     "private_key_passphrase",
     "ca_pem",
     "cert_pem",
     "key_pem",
+    "authorization",
+    "auth_header",
 }
+_REDACT_SUBSTRINGS = (
+    "password", "passwd", "secret", "token", "passphrase",
+    "private_key", "credential", "authorization", "hmac", "apikey", "api_key",
+)
+
+
+def _is_secret_key(k: str) -> bool:
+    kl = str(k).lower()
+    return kl in _REDACT_KEYS or any(s in kl for s in _REDACT_SUBSTRINGS)
 
 # The literal string the cockpit sees in place of any secret field.
 # When the operator edits a destination and saves without retyping a
@@ -150,7 +171,7 @@ _REDACT_SENTINEL = "•" * 8
 def _redact(cfg: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in cfg.items():
-        if k in _REDACT_KEYS and v:
+        if _is_secret_key(k) and v:
             out[k] = _REDACT_SENTINEL
         else:
             out[k] = v
@@ -177,8 +198,8 @@ def _restore_redacted_secrets(
     can be removed).
     """
     out: dict[str, Any] = dict(incoming)
-    for k in _REDACT_KEYS:
-        if k in out and out[k] == _REDACT_SENTINEL:
+    for k, v in list(out.items()):
+        if _is_secret_key(k) and v == _REDACT_SENTINEL:
             out[k] = existing.get(k, "")
     return out
 

@@ -49,16 +49,52 @@ def test_latest_captured_at_returns_newest_tz_aware(fresh_db: Any, tmp_path: Pat
 # ── capture-freshness truth signal ───────────────────────────────────
 
 def _enable_schedule(interval_min: int = 10) -> None:
+    from datetime import datetime as _dt, timedelta as _td  # noqa: PLC0415
+
     from arclap_station.db import get_db  # noqa: PLC0415
 
+    # A ±3h window centred on now → always active, and "opened" ~180 min
+    # ago, so the freshness tests depend on photo AGE not the wall-clock
+    # minute the suite happens to run at.
+    now = _dt.now()
+    start = (now - _td(hours=3)).strftime("%H:%M")
+    end = (now + _td(hours=3)).strftime("%H:%M")
     with get_db().tx() as conn:
         conn.execute(
             """INSERT INTO schedules(id, name, interval_min, from_time, to_time,
                                      days_csv, enabled, dest_filter, conditions)
                VALUES(?,?,?,?,?,?,?,?,?)""",
-            ("s1", "Test", interval_min, "00:00", "23:59",
+            ("s1", "Test", interval_min, start, end,
              "mon,tue,wed,thu,fri,sat,sun", 1, None, None),
         )
+
+
+def test_freshness_none_outside_active_window(fresh_db: Any, tmp_path: Path) -> None:
+    """Off-hours regression: a stale photo must NOT alarm when now is
+    outside every enabled schedule's active window (the v0.9.3 bug that
+    fired a webhook every night and weekend)."""
+    from datetime import datetime as _dt, timedelta as _td  # noqa: PLC0415
+
+    from arclap_station.db import get_db  # noqa: PLC0415
+    from arclap_station.health.selftest import _capture_freshness  # noqa: PLC0415
+    from arclap_station.photos.store import get_store  # noqa: PLC0415
+
+    now = _dt.now()
+    start = (now + _td(hours=3)).strftime("%H:%M")   # window starts 3h from now
+    end = (now + _td(hours=4)).strftime("%H:%M")
+    with get_db().tx() as conn:
+        conn.execute(
+            "INSERT INTO schedules(id, name, interval_min, from_time, to_time, "
+            "days_csv, enabled, dest_filter, conditions) "
+            "VALUES('s','S',10,?,?,'mon,tue,wed,thu,fri,sat,sun',1,NULL,NULL)",
+            (start, end),
+        )
+    # Deliberately very stale — old logic would scream 'camera bad'.
+    get_store().register(
+        tmp_path / "a.jpg", size_bytes=10,
+        captured_at=datetime.now(UTC) - timedelta(hours=6),
+    )
+    assert _capture_freshness() is None
 
 
 def test_freshness_none_without_schedule(fresh_db: Any, tmp_path: Path) -> None:

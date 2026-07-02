@@ -5,10 +5,8 @@ from __future__ import annotations
 import logging
 import random
 import threading
-import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +28,11 @@ JITTER_PCT = 0.3
 # Pi that's lost its uplink, and lets the journal stay readable.
 BREAKER_FAIL_THRESHOLD = 10
 BREAKER_PAUSE_SEC = 300.0
+
+# Destination kinds that actually store the photo file. MQTT publishes
+# metadata only (and webhook may too), so a "success" from those must
+# NOT trigger a keep_local delete — that would lose the only copy.
+_FILE_STORING_KINDS = {"ftp", "sftp", "s3", "local"}
 
 
 @dataclass
@@ -170,6 +173,7 @@ class UploadQueue:
     # ----- worker loop --------------------------------------------------
 
     def start(self, n_workers: int = DEFAULT_WORKERS) -> None:
+        self.recover_in_flight()
         for i in range(n_workers):
             t = threading.Thread(target=self._worker_loop, name=f"uploadq-{i}", daemon=True)
             t.start()
@@ -181,6 +185,26 @@ class UploadQueue:
         for t in self._workers:
             t.join(timeout=timeout)
         self._workers.clear()
+
+    def recover_in_flight(self) -> int:
+        """Reset rows stranded in 'in_flight' by a crash/restart back to
+        'pending' so they get retried.
+
+        `_claim()` flips a row to 'in_flight' and only ever re-selects
+        state IN ('pending','failed') — so a process restart mid-upload
+        (which the watchdogs do on purpose) orphans that row forever, and
+        retention later deletes the never-uploaded original. Called at
+        queue start so every boot self-heals stranded uploads.
+        """
+        with self._db.tx() as conn:
+            cur = conn.execute(
+                "UPDATE upload_queue SET state='pending', next_at=datetime('now'), "
+                "updated_at=datetime('now') WHERE state='in_flight'"
+            )
+        n = cur.rowcount
+        if n:
+            log.info("recovered %d stranded in_flight upload(s) after restart", n)
+        return n
 
     def drain_once(self) -> int:
         """Process all currently-due items synchronously. Returns count processed."""
@@ -385,9 +409,25 @@ class UploadQueue:
                 # Default behaviour: keep the local copy. Only delete
                 # if the schedule explicitly opted out.
                 return
-            # Belt-and-braces: confirm at least one destination uploaded
-            # successfully before deleting (a 0-destination edge case
-            # wouldn't have flipped all_done, but cheap to double-check).
+            # Only delete the local file if at least one destination that
+            # ACTUALLY STORES THE FILE has it. MQTT publishes metadata
+            # only (and webhook may too); deleting the local copy after a
+            # metadata-only "success" would lose the photo entirely.
+            with self._db.connect() as conn:
+                dest_rows = conn.execute(
+                    "SELECT DISTINCT d.type FROM upload_queue q "
+                    "JOIN destinations d ON d.id = q.dest_id "
+                    "WHERE q.photo_id = ? AND q.state = 'ok'",
+                    (photo_id,),
+                ).fetchall()
+            kinds = {str(r[0]) for r in dest_rows}
+            if not (kinds & _FILE_STORING_KINDS):
+                log.warning(
+                    "keep_local=False for photo %d but no file-storing destination "
+                    "has it (only %s) — keeping local copy to avoid data loss",
+                    photo_id, ", ".join(sorted(kinds)) or "none",
+                )
+                return
             from pathlib import Path as _P  # noqa: PLC0415
             p = _P(photo_path)
             if p.exists():
@@ -418,16 +458,21 @@ class UploadQueue:
         if attempts >= 12:
             self._mark_failed(item, err, permanent=True)
             return
-        next_at = datetime.fromtimestamp(time.time() + _backoff_seconds(attempts), tz=UTC)
+        # Store next_at in SQLite's own datetime format via datetime('now',
+        # '+N seconds'). Previously we wrote isoformat() ("...T...+00:00")
+        # but _claim() compares `next_at <= datetime('now')` which yields
+        # space-separated, tz-less text — a lexicographic mismatch ('T' >
+        # ' ') that made every retry undue until the next UTC midnight.
+        delay = max(1, int(round(_backoff_seconds(attempts))))
         with self._db.tx() as conn:
             conn.execute(
                 """
                 UPDATE upload_queue
-                SET state='failed', attempts=?, next_at=?, last_error=?,
-                    updated_at=datetime('now')
+                SET state='failed', attempts=?, next_at=datetime('now', ?),
+                    last_error=?, updated_at=datetime('now')
                 WHERE id=?
                 """,
-                (attempts, next_at.isoformat(timespec="seconds"), err[:1024], item.id),
+                (attempts, f"+{delay} seconds", err[:1024], item.id),
             )
 
     def _mark_failed(self, item: QueueItem, err: str, *, permanent: bool) -> None:

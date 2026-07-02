@@ -214,6 +214,15 @@ class PhotoStore:
         with self._db.tx() as conn:
             conn.execute("UPDATE photos SET upload_state=? WHERE id=?", (state, photo_id))
 
+    def set_starred(self, photo_id: int, starred: bool) -> bool:
+        """Star / unstar a photo. Starred photos survive every retention
+        sweep (including emergency). Returns False if the photo is gone."""
+        with self._db.tx() as conn:
+            cur = conn.execute(
+                "UPDATE photos SET starred=? WHERE id=?", (1 if starred else 0, photo_id)
+            )
+        return cur.rowcount > 0
+
 
 def _row_to_record(row: Any) -> PhotoRecord:
     return PhotoRecord(

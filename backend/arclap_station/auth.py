@@ -45,11 +45,17 @@ class AuthState:
 
     pin_hash: str | None = None
     failed_attempts: dict[str, FailedAttempts] = field(default_factory=dict)
+    # Monotonic session generation. Every issued token embeds the epoch
+    # at sign time; validate_session rejects tokens whose epoch != the
+    # current stored one. Bumped on logout and PIN change → cheap
+    # server-side revocation for a stateless signed-token scheme.
+    session_epoch: int = 0
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "pin_hash": self.pin_hash,
+                "session_epoch": self.session_epoch,
                 "failed_attempts": {
                     ip: {"count": fa.count, "first_at": fa.first_at}
                     for ip, fa in self.failed_attempts.items()
@@ -63,6 +69,7 @@ class AuthState:
         fa_raw = data.get("failed_attempts") or {}
         return cls(
             pin_hash=data.get("pin_hash"),
+            session_epoch=int(data.get("session_epoch", 0)),
             failed_attempts={
                 ip: FailedAttempts(count=v.get("count", 0), first_at=v.get("first_at", 0.0))
                 for ip, v in fa_raw.items()
@@ -114,6 +121,21 @@ class AuthManager:
             "utf-8"
         )
         state.failed_attempts = {}
+        # A PIN change invalidates every previously-issued session.
+        state.session_epoch = int(state.session_epoch) + 1
+        self._save(state)
+
+    def revoke_all_sessions(self) -> None:
+        """Invalidate every existing session token (called on logout).
+
+        Sessions are stateless signed tokens, so we bump a stored epoch
+        that every token must match. Cheap server-side revocation; on a
+        single-operator station "log out" reasonably means "log out
+        everywhere". Without this, `delete_cookie` only clears the
+        browser copy — a captured token stayed valid for its full 12h.
+        """
+        state = self._load()
+        state.session_epoch = int(state.session_epoch) + 1
         self._save(state)
 
     def lockout_remaining(self, ip: str) -> int:
@@ -164,7 +186,11 @@ class AuthManager:
     _SEP = "|"
 
     def _sign_session(self, ip: str) -> str:
-        payload = f"sub=arclap{self._SEP}ip={ip}{self._SEP}iat={int(time.time())}"
+        epoch = self._load().session_epoch
+        payload = (
+            f"sub=arclap{self._SEP}ip={ip}{self._SEP}"
+            f"iat={int(time.time())}{self._SEP}ep={epoch}"
+        )
         return self._signer.sign(payload).decode("utf-8")
 
     def validate_session(self, token: str | None) -> dict[str, Any] | None:
@@ -193,4 +219,18 @@ class AuthManager:
             if "=" in kv:
                 k, v = kv.split("=", 1)
                 out[k] = v
+        # Reject tokens from before the last revocation (logout / PIN
+        # change). Legacy tokens have no 'ep' — accept them only while no
+        # revocation has ever happened (epoch still 0), so upgrades don't
+        # log everyone out spuriously.
+        cur_epoch = self._load().session_epoch
+        if "ep" not in out:
+            if cur_epoch != 0:
+                return None
+        else:
+            try:
+                if int(out["ep"]) != cur_epoch:
+                    return None
+            except (ValueError, TypeError):
+                return None
         return out

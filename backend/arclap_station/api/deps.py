@@ -16,13 +16,30 @@ def get_auth() -> AuthManager:
     return AuthManager()
 
 
+# Only these direct peers are trusted to have set X-Forwarded-For — i.e.
+# our own Caddy reverse proxy on loopback (the app binds 127.0.0.1:8080
+# and Caddy is its only client).
+_TRUSTED_PROXIES = {"127.0.0.1", "::1"}
+
+
 def get_client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+    """Real client IP for PIN-lockout keying.
+
+    Trust X-Forwarded-For ONLY when the direct connection is our own
+    Caddy proxy on loopback, and take the LAST hop — Caddy appends the
+    true TCP peer there, which the client cannot forge. The old code took
+    the FIRST hop, which is entirely attacker-controlled, so a brute-force
+    client could send a fresh X-Forwarded-For per request and never trip
+    the lockout.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if peer in _TRUSTED_PROXIES:
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            parts = [p.strip() for p in fwd.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
+    return peer
 
 
 async def require_session(

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from arclap_station.api.deps import require_session
 from arclap_station.audit import emit as audit_emit
@@ -81,6 +82,26 @@ async def full_photo(
     if not src.exists():
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="photo file missing")
     return FileResponse(src)
+
+
+class StarBody(BaseModel):
+    starred: bool = True
+
+
+@router.post("/{photo_id}/star")
+async def star_photo(
+    photo_id: int,
+    body: StarBody,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Star / unstar a photo. Starred photos survive every retention
+    sweep (including emergency) — this is the operator's only long-term
+    keep mechanism, so it must actually persist."""
+    ok = get_store().set_starred(photo_id, body.starred)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="photo not found")
+    audit_emit("user", "gallery.star" if body.starred else "gallery.unstar", {"photo_id": photo_id})
+    return {"ok": True, "starred": body.starred}
 
 
 @router.delete("/{photo_id}")

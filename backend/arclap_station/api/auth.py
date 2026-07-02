@@ -76,7 +76,14 @@ def _secure_cookie(request: Request) -> bool:
 
 
 @router.post("/logout")
-async def logout(response: Response, request: Request) -> dict[str, Any]:
+async def logout(
+    response: Response,
+    request: Request,
+    auth: AuthManager = Depends(get_auth),
+) -> dict[str, Any]:
+    # Actually invalidate the session server-side, not just clear the
+    # browser cookie — a captured token was otherwise valid for 12h.
+    auth.revoke_all_sessions()
     response.delete_cookie(SESSION_COOKIE, path="/")
     audit_emit("user", "auth.logout", {"ip": get_client_ip(request)})
     return {"ok": True}

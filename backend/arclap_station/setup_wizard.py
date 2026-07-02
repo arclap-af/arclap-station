@@ -10,7 +10,7 @@ import subprocess
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from arclap_station.acceptance.runner import get_runner
@@ -76,9 +76,22 @@ async def setup_status() -> dict[str, Any]:
 
 @router.post("/pin", dependencies=[Depends(require_first_boot)])
 async def setup_pin(
-    payload: PinRequest, request: Request, response: Response
+    payload: PinRequest,
+    request: Request,
+    response: Response,
+    arclap_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     auth = AuthManager()
+    # Bootstrap-safe takeover guard: the FIRST PIN set is open (there's no
+    # operator yet). But once a PIN exists — mid-setup, before /finish
+    # closes the gate — only the session that set it may change it.
+    # Without this a LAN attacker could overwrite the operator's PIN
+    # during the setup window and seize the station.
+    if auth.is_pin_set() and auth.validate_session(arclap_session) is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="PIN already set — authenticate to change it",
+        )
     auth.set_pin(payload.pin)
     # Issue session immediately so the wizard can keep going without a separate login.
     token = auth.verify_pin(payload.pin, get_client_ip(request))
@@ -211,7 +224,15 @@ async def setup_destination_test(payload: DestinationTestRequest) -> dict[str, A
             status_code=status.HTTP_400_BAD_REQUEST, detail="unknown destination type"
         )
     factory = REGISTRY[payload.type]
-    uploader = factory("probe", "probe", payload.config)
+    # A malformed config (missing host, bad port, …) makes the uploader
+    # constructor raise ValueError — that's a client error (400), not a
+    # server crash (500). Build inside its own guard so we can classify it.
+    try:
+        uploader = factory("probe", "probe", payload.config)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid config: {exc}"
+        ) from exc
     try:
         return uploader.test()
     except UploadError as exc:

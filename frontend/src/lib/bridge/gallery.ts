@@ -96,9 +96,8 @@ export const gallery = {
     const resp = await apiJson(path, listResponseSchema);
     return resp.items.map(adaptPhoto);
   },
-  async star(_id: string, _starred: boolean): Promise<void> {
-    // Backend doesn't expose /star yet — no-op so the UI doesn't 404.
-    return;
+  async star(id: string, starred: boolean): Promise<void> {
+    await apiFetch(`/gallery/${id}/star`, { method: "POST", body: { starred } });
   },
   async retry(_id: string, _destinationId: string): Promise<void> {
     // Backend has /api/queue/retry (drain-once) at the queue level —

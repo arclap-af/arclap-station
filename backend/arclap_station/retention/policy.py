@@ -3,18 +3,24 @@
 Tiered keep/delete logic so the SD card on a 2-year construction-site
 deployment never fills:
 
-  HOT     (0–7 days)   — always kept (regardless of upload state)
-  WARM    (7–30 days)  — kept if uploaded OR starred
-  COLD    (30–90 days) — kept only if starred
-  ARCHIVE (90+ days)   — kept only if starred
+  Un-uploaded photos are NEVER deleted — the local file is the only
+  copy that exists, so losing it is unrecoverable.
+  HOT     (0–7 days)   — kept
+  WARM    (7–30 days)  — kept
+  COLD    (30–90 days) — deletable once uploaded (unless starred)
+  ARCHIVE (90+ days)   — deletable once uploaded (unless starred)
+  Starred photos are always kept.
 
 Triggered:
 - Daily by the arclap-retention.timer (03:00 local).
 - On-demand via `arclap-station retention-sweep`.
 
-When disk usage >= EMERGENCY_PCT we ignore the hot tier and delete
-unstarred from oldest until we're under TARGET_PCT — the station must
-keep capturing rather than refuse new shots because the SD card is full.
+When disk usage >= EMERGENCY_PCT we additionally delete UPLOADED hot/warm
+photos oldest-first until we're under TARGET_PCT — the station keeps
+capturing rather than refuse new shots. Un-uploaded and starred photos
+stay protected even in emergency; if that leaves the card full we emit
+`retention.disk_critical` and let capture pause itself (the scheduler
+refuses new shots under 2% free).
 
 Every sweep writes a structured audit event for forensics.
 """
@@ -90,15 +96,21 @@ def _photo_tier(captured_at: datetime, now: datetime) -> str:
 
 
 def _should_keep(tier: str, uploaded: bool, starred: bool, emergency: bool) -> bool:
+    # Starred always survives.
     if starred:
         return True
-    if emergency:
-        return False  # only starred survives in emergency
-    if tier == "hot":
+    # NEVER delete a photo that hasn't safely uploaded — the local file
+    # is the only copy, so losing it is unrecoverable. This holds even
+    # in emergency: if the card is full of un-uploaded photos the right
+    # answer is to alert + let capture pause, not destroy the un-synced
+    # backlog. (Fixes the P1 where emergency mode deleted everything.)
+    if not uploaded:
         return True
-    if tier == "warm":
-        return uploaded
-    # cold + archive: only starred (already returned above)
+    if emergency:
+        return False  # uploaded + not starred → free it to keep capturing
+    if tier in ("hot", "warm"):
+        return True
+    # cold + archive, uploaded, not starred → deletable oldest-first
     return False
 
 
@@ -156,13 +168,35 @@ def sweep(force: bool = False) -> SweepReport:
             deleted += 1
             bytes_freed += size
 
-        # If non-emergency, stop as soon as we hit the target threshold.
-        if not emergency and deleted % 10 == 0:
+        # Stop as soon as we're under the target threshold — in BOTH
+        # normal and emergency mode. Emergency deletes more categories
+        # (uploaded hot/warm too) but must still stop at TARGET_PCT
+        # instead of running the whole table and deleting every
+        # eligible photo on the station.
+        if deleted % 10 == 0:
             now_pct = disk_usage_pct(photos_root)
             if now_pct <= TARGET_PCT * 100:
                 break
 
     after_pct = disk_usage_pct(photos_root)
+
+    if emergency and after_pct >= EMERGENCY_PCT * 100:
+        # Ran the full eligible set and still couldn't get under the
+        # emergency threshold — the card is full of protected photos
+        # (un-uploaded or starred). Surface it loudly; the operator must
+        # fix the uplink or add capacity, and capture pauses under 2% free.
+        log.error(
+            "retention: still at %.1f%% after emergency sweep — remaining "
+            "photos are un-uploaded or starred and were protected", after_pct,
+        )
+        try:
+            audit_emit("system", "retention.disk_critical", {
+                "disk_used_pct": round(after_pct, 1),
+                "photos_deleted": deleted,
+                "reason": "un-uploaded/starred backlog cannot be freed",
+            })
+        except Exception:  # noqa: BLE001
+            pass
 
     # DB hygiene — once we've deleted rows, give SQLite a chance to
     # actually reclaim space. WAL checkpoint truncates the write-ahead

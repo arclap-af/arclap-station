@@ -56,23 +56,60 @@ def _worst(statuses: list[str]) -> str:
 # probes keep their own try/except so a partial failure still yields a
 # meaningful detail string.
 
+_DOW_LABELS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _schedule_active_now(days_csv: str, from_time: str, to_time: str, now: datetime) -> bool:
+    """True if a schedule's day + time window is active at `now` (local
+    clock, same basis as fire_capture). Deliberately does NOT consider
+    disk/destination skips — those are their own health checks; here we
+    only decide whether a capture is *due* so a stale photo at night or
+    on an off-day never raises a false alarm."""
+    days = {d.strip().lower() for d in (days_csv or "").split(",") if d.strip()}
+    if days and _DOW_LABELS[now.weekday()] not in days:
+        return False
+    if from_time and to_time:
+        try:
+            fh, fm = (int(x) for x in from_time.split(":"))
+            th, tm = (int(x) for x in to_time.split(":"))
+        except ValueError:
+            return True  # malformed window → don't suppress
+        cur = now.hour * 60 + now.minute
+        f, t = fh * 60 + fm, th * 60 + tm
+        return f <= cur <= t if f <= t else (cur >= f or cur <= t)
+    return True
+
+
+def _minutes_since_window_open(from_time: str, now: datetime) -> float:
+    """Minutes since a schedule's daily window opened (handles a window
+    that opened before midnight). Blank/malformed → treat as long-open."""
+    try:
+        fh, fm = (int(x) for x in from_time.split(":"))
+    except (ValueError, AttributeError):
+        return 24 * 60.0
+    delta = (now.hour * 60 + now.minute) - (fh * 60 + fm)
+    if delta < 0:
+        delta += 24 * 60
+    return float(delta)
+
+
 def _capture_freshness() -> Check | None:
     """Truth signal for camera health on a *scheduled* station.
 
-    The camera beacon records the last op (detect/capture/preview). A
-    detect() succeeds whenever the body is merely *present*, so the
-    beacon can read green while every actual capture fails with a USB
-    `-1` error — exactly the false-green we hit in production. So when a
-    schedule is enabled, health is judged by whether photos are actually
-    landing within the schedule cadence, not by detection.
+    detect() succeeds whenever the body is merely present, so the beacon
+    can read green while every actual capture fails — so when a schedule
+    is active we judge health by whether photos are actually landing.
 
-    Returns:
-      * a Check (ok / warn / bad) when an enabled schedule exists and at
-        least one photo has ever been captured — this is authoritative
-        and overrides the beacon,
-      * None when there is no enabled schedule (manual-only station) or
-        no photos yet (a brand-new station shouldn't alarm) — the caller
-        then falls back to the beacon.
+    Crucially this is only meaningful INSIDE an active capture window: at
+    night or on an off-day no capture is due, so a stale 'last photo'
+    must NOT alarm (the v0.9.3 bug that fired a webhook every night and
+    weekend). Staleness is also only counted from when the window opened,
+    so entering the morning window with yesterday's last photo doesn't
+    trip an instant alarm.
+
+    Returns a Check when an enabled schedule is active right now and we
+    have a capture baseline; None otherwise (manual-only, outside every
+    window, or no photos yet) so the caller falls back to the beacon.
     """
     try:
         from arclap_station.db import get_db  # noqa: PLC0415
@@ -80,18 +117,35 @@ def _capture_freshness() -> Check | None:
 
         with get_db().connect() as conn:
             rows = conn.execute(
-                "SELECT interval_min FROM schedules WHERE enabled=1"
+                "SELECT interval_min, from_time, to_time, days_csv FROM schedules WHERE enabled=1"
             ).fetchall()
-        intervals = [int(r["interval_min"]) for r in rows if r["interval_min"]]
-        if not intervals:
+        if not rows:
             return None  # manual-only — defer to the beacon
-        interval_min = max(1, min(intervals))
+
+        now_local = datetime.now()
+        active = [
+            r for r in rows
+            if _schedule_active_now(
+                str(r["days_csv"] or ""), str(r["from_time"] or ""),
+                str(r["to_time"] or ""), now_local,
+            )
+        ]
+        if not active:
+            return None  # outside every active window — nothing is due
+
+        # The most frequent active schedule drives the judgment.
+        active.sort(key=lambda r: int(r["interval_min"] or 1))
+        drive = active[0]
+        interval_min = max(1, int(drive["interval_min"] or 1))
+        mins_in_window = _minutes_since_window_open(str(drive["from_time"] or ""), now_local)
 
         latest = get_store().latest_captured_at()
         if latest is None:
-            return None  # schedule set but nothing captured yet — don't alarm
+            return None  # no baseline yet — beacon/detection judges a new station
 
         age_min = (datetime.now(UTC) - latest).total_seconds() / 60.0
+        # Only count staleness accrued inside the current window.
+        stale = min(age_min, mins_in_window)
         grace = 2.0
         hint = (
             "Detection can still succeed while captures fail (USB transport, "
@@ -99,18 +153,18 @@ def _capture_freshness() -> Check | None:
             "5 A PSU is in use, and the body's auto-power-off is disabled. The "
             "station auto-recovers (reconnect → USB power-cycle → restart)."
         )
-        if age_min > 2 * interval_min + grace:
+        if stale > 2 * interval_min + grace:
             return Check(
                 "camera", "Camera", "bad",
-                f"No photo in {age_min:.0f} min — schedule fires every "
-                f"{interval_min} min, so captures are failing.",
+                f"No photo in {stale:.0f} min of active hours — schedule fires "
+                f"every {interval_min} min, so captures are failing.",
                 hint,
             )
-        if age_min > interval_min + grace:
+        if stale > interval_min + grace:
             return Check(
                 "camera", "Camera", "warn",
-                f"Last photo {age_min:.0f} min ago (schedule every {interval_min} min) "
-                "— a capture may have been missed.",
+                f"Last photo {stale:.0f} min ago in active hours "
+                f"(schedule every {interval_min} min) — a capture may have been missed.",
                 "Watching for the next scheduled capture. " + hint,
             )
         return Check(
