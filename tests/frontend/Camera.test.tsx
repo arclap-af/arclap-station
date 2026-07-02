@@ -25,6 +25,27 @@ vi.mock("../../frontend/src/lib/bridge/camera", async () => {
   };
   return {
     camera: {
+      // The page also queries camera.info() for detection state + choices.
+      // Empty choices → the ChipRows fall back to their built-in presets
+      // (which include the "100"/"400" ISO chips the tests click).
+      info: vi.fn(async () => ({
+        detected: true,
+        model: "Canon EOS 5D Mark IV",
+        lens: "EF 24-70mm f/2.8L II USM",
+        battery: "75%",
+        port: "usb:001,005",
+        shutter_count: 12045,
+        values: {},
+        choices: {},
+        health: {
+          ok: true,
+          last_ok_at: "2026-05-19T12:00:00Z",
+          last_error: null,
+          last_error_at: null,
+          last_reset_at: null,
+          beacon_age_sec: 3,
+        },
+      })),
       settings: vi.fn(async () => cur),
       updateSettings: vi.fn(async (patch: Partial<typeof cur>) => {
         cur = { ...cur, ...patch };
@@ -45,16 +66,20 @@ describe("Camera", () => {
     renderWithProviders(<CameraPage />);
     await waitFor(() => {
       expect(screen.getByText(/Camera$/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /Shutter/i })).toBeInTheDocument();
+      // "Shutter" is a ChipRow label; its chips are the shutter presets.
+      expect(screen.getByText(/Shutter/i)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "1/250" })).toBeInTheDocument();
     });
   });
 
   it("changes ISO when chip clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CameraPage />);
-    await waitFor(() => expect(screen.getByText("100")).toBeInTheDocument());
-    // Sanity check: clicking the chip dispatches without throwing.
-    await user.click(screen.getByText("400"));
-    expect(screen.getByText("400")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "100" })).toBeInTheDocument());
+    // Sanity check: clicking the chip dispatches without throwing. Scope to
+    // the button role — after the click "400" also appears in the row's
+    // current-value label, so a bare getByText would be ambiguous.
+    await user.click(screen.getByRole("button", { name: "400" }));
+    expect(screen.getByRole("button", { name: "400" })).toBeInTheDocument();
   });
 });

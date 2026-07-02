@@ -92,7 +92,8 @@ def status() -> dict[str, Any]:
             except (ValueError, IndexError):
                 hs = 0
             try:
-                rx = int(parts[5]); tx = int(parts[6])
+                rx = int(parts[5])
+                tx = int(parts[6])
             except (ValueError, IndexError):
                 rx = tx = 0
             import time as _t  # noqa: PLC0415

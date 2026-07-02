@@ -13,7 +13,7 @@ from typing import Any
 from arclap_station.uploaders import UploadError, expand_placeholders, pick, pick_bool, register
 
 
-class _ImplicitFTP_TLS(ftplib.FTP_TLS):
+class _ImplicitFTP_TLS(ftplib.FTP_TLS):  # noqa: N801 - mirrors stdlib ftplib.FTP_TLS
     """FTPS *implicit* — TLS from the first byte (default port 990),
     unlike explicit FTPS which starts plaintext and upgrades via AUTH TLS.
     stdlib ftplib only speaks explicit, so we wrap the control socket in
@@ -26,12 +26,12 @@ class _ImplicitFTP_TLS(ftplib.FTP_TLS):
         if port > 0:
             self.port = port
         if timeout != -999:
-            self.timeout = timeout  # type: ignore[assignment]
+            self.timeout = timeout
         self.sock = socket.create_connection((self.host, self.port), self.timeout,
                                               source_address=source_address)
         self.af = self.sock.family
         self.sock = self.context.wrap_socket(self.sock, server_hostname=self.host)
-        self.file = self.sock.makefile("r")  # type: ignore[assignment]
+        self.file = self.sock.makefile("r")
         self.welcome = self.getresp()
         return self.welcome
 

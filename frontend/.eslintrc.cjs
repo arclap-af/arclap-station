@@ -14,6 +14,9 @@ module.exports = {
   rules: {
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",
+    // Literal quotes/apostrophes in JSX text render fine; escaping every
+    // one to &quot;/&apos; is noise, not correctness.
+    "react/no-unescaped-entities": "off",
     "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     "@typescript-eslint/no-explicit-any": "error",
     "@typescript-eslint/no-empty-function": "off",

@@ -41,9 +41,10 @@ def _state_path() -> Path:
 
 def read_state() -> dict[str, Any]:
     try:
-        return json.loads(_state_path().read_text(encoding="utf-8"))
+        data = json.loads(_state_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def write_state(result: dict[str, Any]) -> None:

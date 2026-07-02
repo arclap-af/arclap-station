@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch, apiJson, API_PREFIX } from "../api";
+import { obj } from "./json";
 
 // What the Gallery page renders. Built from the backend's PhotoRecord
 // in /api/gallery/list, with sensible fallbacks for fields the backend
@@ -36,8 +37,9 @@ const listResponseSchema = z.object({
   items: z.array(z.record(z.unknown())),
 });
 
-function adaptPhoto(raw: Record<string, any>): Photo {
+function adaptPhoto(raw: Record<string, unknown>): Photo {
   const id = String(raw.id ?? "");
+  const exif = obj(raw.exif);
   // Backend currently returns a single `upload_state` string per photo,
   // not a per-destination array. Synthesize one entry so the UI's
   // Uploaded/Pending pill stops permanently saying "Local".
@@ -73,9 +75,9 @@ function adaptPhoto(raw: Record<string, any>): Photo {
     size_bytes: typeof raw.size_bytes === "number" ? raw.size_bytes : 0,
     width: typeof raw.width === "number" ? raw.width : 0,
     height: typeof raw.height === "number" ? raw.height : 0,
-    iso: raw.exif?.iso ? String(raw.exif.iso) : "—",
-    shutter: raw.exif?.shutter ? String(raw.exif.shutter) : "—",
-    aperture: raw.exif?.aperture ? String(raw.exif.aperture) : "—",
+    iso: exif.iso ? String(exif.iso) : "—",
+    shutter: exif.shutter ? String(exif.shutter) : "—",
+    aperture: exif.aperture ? String(exif.aperture) : "—",
     starred: Boolean(raw.starred),
     uploads,
     path: String(raw.path ?? ""),

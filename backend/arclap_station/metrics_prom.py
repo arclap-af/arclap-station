@@ -173,11 +173,11 @@ def render() -> str:
             ("uptime_seconds", "arclap_uptime_seconds"),
             ("network_throughput_mbps", "arclap_network_throughput_mbps"),
         ):
-            v = s.get(key)
-            if v is None:
+            val = s.get(key)
+            if val is None:
                 continue
             line(f"# TYPE {prom_name} gauge")
-            line(f"{prom_name} {v}")
+            line(f"{prom_name} {val}")
     except Exception:  # noqa: BLE001
         pass
 

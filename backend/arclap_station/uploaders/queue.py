@@ -275,14 +275,13 @@ class UploadQueue:
         # destination has a fresher OK than its last error, breaker
         # is closed.
         all_failing = True
-        latest_err_ts: float | None = None
-        from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt  # noqa: PLC0415
 
         for d in dests:
             if not d.last_error:
                 all_failing = False
                 break
-            err_time = None
             ok_time = None
             try:
                 if d.last_error:

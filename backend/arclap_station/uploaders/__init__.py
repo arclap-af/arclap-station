@@ -85,7 +85,7 @@ def pick_bool(config: dict[str, Any], *keys: str, default: bool = False) -> bool
         return v
     if isinstance(v, str):
         return v.strip().lower() in ("1", "true", "yes", "on")
-    if isinstance(v, (int, float)):
+    if isinstance(v, int | float):
         return bool(v)
     return default
 

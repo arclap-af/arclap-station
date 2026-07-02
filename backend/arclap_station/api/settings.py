@@ -191,7 +191,7 @@ def _local_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("1.1.1.1", 1))
-        return s.getsockname()[0]
+        return str(s.getsockname()[0])
     except OSError:
         return ""
     finally:
@@ -300,13 +300,13 @@ def _connectivity_probes() -> list[dict[str, str]]:
         add("DNS resolve", False, str(exc)[:40])
     # NTP synced?
     try:
-        r = subprocess.run(
+        ntp = subprocess.run(
             ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
             capture_output=True,
             text=True,
             timeout=2,
         )
-        synced = r.stdout.strip() == "yes"
+        synced = ntp.stdout.strip() == "yes"
         add("NTP synced", synced, "yes" if synced else "no")
     except (FileNotFoundError, subprocess.SubprocessError):
         pass

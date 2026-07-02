@@ -189,7 +189,8 @@ async def camera_info(_: dict[str, Any] = Depends(require_session)) -> dict[str,
                 tree = {}
 
     def widget(path: str) -> dict[str, Any]:
-        return tree.get(path, {}) if isinstance(tree, dict) else {}
+        w = tree.get(path, {}) if isinstance(tree, dict) else {}
+        return w if isinstance(w, dict) else {}
 
     def value_of(*paths: str, fallback: str = "—") -> str:
         for p in paths:
@@ -314,6 +315,7 @@ async def reconnect(_: dict[str, Any] = Depends(require_session)) -> dict[str, A
     # actually succeeds. Best-effort: never fail the request on a beacon error.
     try:
         import json as _json  # noqa: PLC0415
+
         from arclap_station.camera import health as _ch  # noqa: PLC0415
 
         path = _ch._path()  # noqa: SLF001
@@ -428,6 +430,7 @@ async def usb_reset(_: dict[str, Any] = Depends(require_session)) -> dict[str, A
     # detect() call.
     try:
         import json as _json  # noqa: PLC0415
+
         from arclap_station.camera import health as _ch  # noqa: PLC0415
 
         bpath = _ch._path()  # noqa: SLF001

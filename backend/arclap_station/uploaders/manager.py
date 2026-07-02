@@ -19,14 +19,14 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, cast
 
+from arclap_station.config import get_settings
+from arclap_station.db import Database, get_db
+from arclap_station.uploaders import REGISTRY, Uploader, build
+
 
 def datetime_now_iso() -> str:
     """ISO-8601 UTC second-precision — matches what SQLite's datetime('now') emits."""
     return _dt.datetime.now(tz=_dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-from arclap_station.config import get_settings
-from arclap_station.db import Database, get_db
-from arclap_station.uploaders import REGISTRY, Uploader, build
 
 log = logging.getLogger(__name__)
 
@@ -279,7 +279,7 @@ def _fernet() -> Any:
 def encrypt_config(config: dict[str, Any]) -> str:
     raw = json.dumps(config).encode("utf-8")
     try:
-        token = _fernet().encrypt(raw)
+        token: bytes = _fernet().encrypt(raw)
         # Tag with "f1:" so decrypt knows it's the new format.
         return "f1:" + token.decode("ascii")
     except Exception as exc:  # noqa: BLE001

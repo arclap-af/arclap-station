@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch, apiJson } from "../api";
+import { obj, strOrNull } from "./json";
 
 export const destinationKind = z.enum(["s3", "sftp", "ftp", "webhook", "local", "mqtt"]);
 export type DestinationKind = z.infer<typeof destinationKind>;
@@ -29,7 +30,7 @@ export type DestinationTest = {
   steps: Array<{ label: string; ok: boolean; detail: string | null }>;
 };
 
-function adapt(raw: Record<string, any>): Destination {
+function adapt(raw: Record<string, unknown>): Destination {
   const kind = (raw.type ?? raw.kind ?? "local") as DestinationKind;
   return {
     id: String(raw.id ?? ""),
@@ -74,18 +75,18 @@ export const destinations = {
   },
   async test(payload: DestinationDraft): Promise<DestinationTest> {
     try {
-      const raw = (await apiJson("/destinations/test", z.unknown(), {
+      const raw = obj(await apiJson("/destinations/test", z.unknown(), {
         method: "POST",
         body: toBackend(payload),
-      })) as any;
+      }));
       // Backend returns the uploader test result directly; wrap into steps[].
       return {
-        ok: Boolean(raw?.ok ?? true),
+        ok: Boolean(raw.ok ?? true),
         steps: [
           {
             label: payload.name || "Test",
-            ok: Boolean(raw?.ok ?? true),
-            detail: raw?.detail ?? null,
+            ok: Boolean(raw.ok ?? true),
+            detail: strOrNull(raw.detail),
           },
         ],
       };

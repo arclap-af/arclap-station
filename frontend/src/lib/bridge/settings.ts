@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "../api";
+import { arr, obj, strOrNull } from "./json";
 
 // All settings tabs use permissive shapes — the backend exposes a
 // subset of what the UI renders, and we fill in sensible defaults so
@@ -68,11 +69,11 @@ function num(v: unknown, fb = 0): number {
 
 export const settings = {
   async general(): Promise<GeneralSettings> {
-    const raw = (await apiFetch<Record<string, any>>("/settings/general")) ?? {};
+    const raw = obj(await apiFetch<Record<string, unknown>>("/settings/general"));
     return {
       station_name: str(raw.name, "Arclap Station"),
       site: str(raw.site, ""),
-      gps: raw.lat != null && raw.lon != null ? `${raw.lat}, ${raw.lon}` : "",
+      gps: raw.lat != null && raw.lon != null ? `${String(raw.lat)}, ${String(raw.lon)}` : "",
       asset_tag: str(raw.serial, ""),
       timezone: str(raw.timezone, "UTC"),
       date_format: "YYYY-MM-DD",
@@ -107,11 +108,10 @@ export const settings = {
     return settings.general();
   },
   async network(): Promise<NetworkInfo> {
-    const raw = (await apiFetch<Record<string, any>>("/settings/network")) ?? {};
-    const eth = (raw.ethernet ?? {}) as Record<string, any>;
-    const wifi = (raw.wifi ?? {}) as Record<string, any>;
-    const cell = (raw.cellular ?? {}) as Record<string, any>;
-    const probes = Array.isArray(raw.probes) ? raw.probes : [];
+    const raw = obj(await apiFetch<Record<string, unknown>>("/settings/network"));
+    const eth = obj(raw.ethernet);
+    const wifi = obj(raw.wifi);
+    const cell = obj(raw.cellular);
     return {
       ethernet: {
         connected: Boolean(eth.connected),
@@ -137,17 +137,22 @@ export const settings = {
         apn: str(cell.apn, "—"),
         data_mb: num(cell.data_mb),
       },
-      probes: probes.map((p: any) => ({
-        label: str(p.label, ""),
-        result: str(p.result, ""),
-        level: (str(p.level, "ok") as "ok" | "warn" | "bad"),
-      })),
+      probes: arr(raw.probes).map((entry) => {
+        const p = obj(entry);
+        return {
+          label: str(p.label, ""),
+          result: str(p.result, ""),
+          level: (str(p.level, "ok") as "ok" | "warn" | "bad"),
+        };
+      }),
     };
   },
   async security(): Promise<SecurityInfo> {
-    const raw = (await apiFetch<Record<string, any>>("/settings/security")) ?? {};
-    const tls = (raw.tls ?? {}) as Record<string, any>;
-    const ssh = (raw.ssh ?? {}) as Record<string, any>;
+    const raw = obj(await apiFetch<Record<string, unknown>>("/settings/security"));
+    const tls = obj(raw.tls);
+    const ssh = obj(raw.ssh);
+    const hasAudit = raw.audit_chain != null;
+    const audit = obj(raw.audit_chain);
     return {
       pin_changed_days_ago: 0,
       auto_lock_minutes: 15,
@@ -155,22 +160,22 @@ export const settings = {
         type: str(tls.type, "Caddy self-signed (internal CA)"),
         fingerprint: str(tls.fingerprint, "—"),
         expires: str(tls.expires, "—"),
-        hsts: tls.hsts ?? true,
+        hsts: tls.hsts == null ? true : Boolean(tls.hsts),
       },
       ssh: {
         enabled: Boolean(ssh.enabled),
         port: num(ssh.port, 22),
         key_count: num(ssh.key_count, 0),
-        last_login: ssh.last_login ? str(ssh.last_login, null as any) : null,
+        last_login: ssh.last_login ? String(ssh.last_login) : null,
       },
       tokens: [
-        ...(raw?.audit_chain?.ok
-          ? [{ name: `Audit chain (${raw.audit_chain.checked} entries)`, prefix: "ok" }]
-          : raw?.audit_chain
+        ...(audit.ok
+          ? [{ name: `Audit chain (${num(audit.checked)} entries)`, prefix: "ok" }]
+          : hasAudit
             ? [
                 {
-                  name: `Audit chain (${raw.audit_chain.checked} entries, ${
-                    raw.audit_chain.breaks?.length ?? 0
+                  name: `Audit chain (${num(audit.checked)} entries, ${
+                    arr(audit.breaks).length
                   } breaks)`,
                   prefix: "WARN",
                 },
@@ -180,7 +185,7 @@ export const settings = {
     };
   },
   async storage(): Promise<StorageInfo> {
-    const raw = (await apiFetch<Record<string, any>>("/settings/storage")) ?? {};
+    const raw = obj(await apiFetch<Record<string, unknown>>("/settings/storage"));
     const usedPct = num(raw.disk_used_pct, 0);
     // Use real capacity from backend; fall back to a derived value if missing.
     const cap = num(raw.capacity_bytes, 0) || 64 * 1024 * 1024 * 1024;
@@ -198,18 +203,18 @@ export const settings = {
     };
   },
   async system(): Promise<SystemInfo> {
-    const raw = (await apiFetch<Record<string, any>>("/settings/system")) ?? {};
-    const snap = raw.snapshot ?? {};
-    const wd = raw.watchdog ?? {};
-    const ups = raw.ups ?? {};
-    const cloud = raw.cloud ?? {};
-    const fw = raw.firmware ?? {};
+    const raw = obj(await apiFetch<Record<string, unknown>>("/settings/system"));
+    const snap = obj(raw.snapshot);
+    const wd = obj(raw.watchdog);
+    const ups = obj(raw.ups);
+    const cloud = obj(raw.cloud);
+    const fw = obj(raw.firmware);
     const upsLabel = ups.detected
-      ? `${ups.driver}${ups.battery_pct != null ? ` · ${ups.battery_pct}%` : ""} · ${ups.status}`
+      ? `${str(ups.driver)}${ups.battery_pct != null ? ` · ${num(ups.battery_pct)}%` : ""} · ${str(ups.status)}`
       : "not detected";
     const watchdogLabel =
       wd.summary === "active"
-        ? `active (kernel ${wd.kernel_runtime_sec}s · service + camera timers)`
+        ? `active (kernel ${num(wd.kernel_runtime_sec)}s · service + camera timers)`
         : wd.summary === "partial"
           ? "partial"
           : "inactive";
@@ -235,8 +240,8 @@ export const settings = {
       },
       cloud: {
         paired: Boolean(cloud.paired),
-        broker: cloud.broker ?? null,
-        cockpit_url: cloud.cockpit_url ?? null,
+        broker: strOrNull(cloud.broker),
+        cockpit_url: strOrNull(cloud.cockpit_url),
       },
     };
   },
@@ -256,12 +261,15 @@ export const settings = {
         `/settings/logs/recent${qs.toString() ? `?${qs}` : ""}`,
       );
       if (!Array.isArray(raw)) return [];
-      return raw.map((e: any) => ({
-        ts: str(e.ts, ""),
-        unit: str(e.unit, "system"),
-        level: (str(e.level, "info") as LogEntry["level"]),
-        message: str(e.message, ""),
-      }));
+      return raw.map((entry) => {
+        const e = obj(entry);
+        return {
+          ts: str(e.ts, ""),
+          unit: str(e.unit, "system"),
+          level: (str(e.level, "info") as LogEntry["level"]),
+          message: str(e.message, ""),
+        };
+      });
     } catch {
       return [];
     }

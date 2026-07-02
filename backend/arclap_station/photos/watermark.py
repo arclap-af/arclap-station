@@ -20,8 +20,12 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from arclap_station.station_config import get_station_store
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +42,7 @@ def apply_watermark_and_rotate(path: Path, *, force: bool = False) -> bool:
     has already succeeded, so cosmetic edits must not fail the chain.
     """
     try:
-        from PIL import Image, ImageDraw, ImageFont, ImageOps  # noqa: PLC0415
+        from PIL import Image, ImageOps  # noqa: PLC0415
     except ImportError:
         return False
 
@@ -69,7 +73,7 @@ def apply_watermark_and_rotate(path: Path, *, force: bool = False) -> bool:
         return False
 
 
-def _wants_watermark(cfg: "object") -> bool:
+def _wants_watermark(cfg: object) -> bool:
     """Should this capture get a burned-in timestamp watermark?
 
     Default: True. Construction-site stations need every photo to
@@ -88,7 +92,7 @@ def _wants_watermark(cfg: "object") -> bool:
         return True
 
 
-def _draw_watermark(img, cfg: "object") -> None:  # noqa: ANN001
+def _draw_watermark(img: PILImage, cfg: object) -> None:
     from PIL import ImageDraw, ImageFont  # noqa: PLC0415
 
     serial = getattr(cfg, "serial", "") or "unknown"
@@ -100,6 +104,7 @@ def _draw_watermark(img, cfg: "object") -> None:  # noqa: ANN001
     # Font sized relative to image height so 6720×4480 and 1920×1080
     # both render reasonably.
     font_size = max(18, h // 100)
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
     except OSError:

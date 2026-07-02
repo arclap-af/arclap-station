@@ -232,8 +232,10 @@ class _GPhoto2Backend:
 
             # Decide retry budget based on recent health.
             try:
+                from datetime import UTC as _UTC
+                from datetime import datetime as _dt  # noqa: PLC0415
+
                 from arclap_station.camera.health import read_state  # noqa: PLC0415
-                from datetime import datetime as _dt, UTC as _UTC  # noqa: PLC0415
 
                 st = read_state()
                 err_at = st.get("last_error_at")

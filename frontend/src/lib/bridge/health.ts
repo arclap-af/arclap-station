@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { apiFetch, apiJson } from "../api";
+import { arr, obj, strOrNull } from "./json";
 
 export type HealthStatus = "ok" | "warn" | "bad" | "unknown";
 
@@ -27,19 +28,26 @@ export interface AlertConfig {
 
 const resultSchema = z.record(z.unknown());
 
-function adaptResult(raw: Record<string, any>): HealthResult {
-  const checks = Array.isArray(raw.checks) ? raw.checks : [];
+const STATUSES = ["ok", "warn", "bad", "unknown"];
+function asStatus(v: unknown): HealthStatus {
+  return (STATUSES.includes(String(v)) ? String(v) : "unknown") as HealthStatus;
+}
+
+function adaptResult(raw: Record<string, unknown>): HealthResult {
   return {
-    overall: (["ok", "warn", "bad", "unknown"].includes(raw.overall) ? raw.overall : "unknown") as HealthStatus,
+    overall: asStatus(raw.overall),
     score: typeof raw.score === "number" ? raw.score : 0,
     ran_at: String(raw.ran_at ?? ""),
-    checks: checks.map((c: any) => ({
-      id: String(c.id ?? ""),
-      label: String(c.label ?? ""),
-      status: (["ok", "warn", "bad", "unknown"].includes(c.status) ? c.status : "unknown") as HealthStatus,
-      detail: String(c.detail ?? ""),
-      hint: c.hint ? String(c.hint) : null,
-    })),
+    checks: arr(raw.checks).map((entry) => {
+      const c = obj(entry);
+      return {
+        id: String(c.id ?? ""),
+        label: String(c.label ?? ""),
+        status: asStatus(c.status),
+        detail: String(c.detail ?? ""),
+        hint: c.hint ? String(c.hint) : null,
+      };
+    }),
   };
 }
 
@@ -47,17 +55,17 @@ export const health = {
   /** Last persisted self-test result (cheap; for polling). */
   async state(): Promise<HealthResult> {
     const raw = await apiJson("/health/state", resultSchema);
-    return adaptResult(raw as Record<string, any>);
+    return adaptResult(raw);
   },
   /** Force a fresh self-test run. */
   async runNow(): Promise<HealthResult> {
     const raw = await apiJson("/health/selftest", resultSchema);
-    return adaptResult(raw as Record<string, any>);
+    return adaptResult(raw);
   },
   async getAlerts(): Promise<AlertConfig> {
-    const raw = (await apiJson("/settings/alerts", z.record(z.unknown()))) as any;
+    const raw = await apiJson("/settings/alerts", z.record(z.unknown()));
     return {
-      alert_webhook: raw.alert_webhook ?? null,
+      alert_webhook: strOrNull(raw.alert_webhook),
       heartbeat_enabled: Boolean(raw.heartbeat_enabled),
       heartbeat_interval_min: Number(raw.heartbeat_interval_min ?? 60),
     };
@@ -68,18 +76,18 @@ export const health = {
     heartbeat_enabled?: boolean;
     heartbeat_interval_min?: number;
   }): Promise<AlertConfig> {
-    const raw = (await apiJson("/settings/alerts", z.record(z.unknown()), {
+    const raw = await apiJson("/settings/alerts", z.record(z.unknown()), {
       method: "PUT",
       body,
-    })) as any;
+    });
     return {
-      alert_webhook: raw.alert_webhook ?? null,
+      alert_webhook: strOrNull(raw.alert_webhook),
       heartbeat_enabled: Boolean(raw.heartbeat_enabled),
       heartbeat_interval_min: Number(raw.heartbeat_interval_min ?? 60),
     };
   },
   async testHeartbeat(): Promise<{ ok: boolean; configured: boolean }> {
-    const raw = (await apiFetch<any>("/health/heartbeat/test", { method: "POST" })) ?? {};
+    const raw = obj(await apiFetch<Record<string, unknown>>("/health/heartbeat/test", { method: "POST" }));
     return { ok: Boolean(raw.ok), configured: Boolean(raw.configured) };
   },
 };

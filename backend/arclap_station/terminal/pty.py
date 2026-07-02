@@ -66,7 +66,7 @@ class RestrictedPTY:
         if self._pid is not None:
             return
         settings = get_settings()
-        pid, fd = self._pty.fork()  # type: ignore[attr-defined]
+        pid, fd = self._pty.fork()
         if pid == 0:  # child
             os.environ.clear()
             # Include /usr/sbin + /sbin so systemctl, ip, ss, etc. work
@@ -148,7 +148,7 @@ class RestrictedPTY:
             import termios  # noqa: PLC0415
 
             payload = struct.pack("HHHH", rows, cols, 0, 0)
-            fcntl.ioctl(self._fd, termios.TIOCSWINSZ, payload)  # type: ignore[attr-defined]
+            fcntl.ioctl(self._fd, termios.TIOCSWINSZ, payload)
         except Exception:  # noqa: BLE001
             pass
 
@@ -158,11 +158,11 @@ class RestrictedPTY:
         self._closed = True
         if self._pid:
             try:
-                os.kill(self._pid, signal.SIGHUP)  # type: ignore[attr-defined]
+                os.kill(self._pid, signal.SIGHUP)
             except (ProcessLookupError, AttributeError):
                 pass
             try:
-                os.waitpid(self._pid, os.WNOHANG)  # type: ignore[attr-defined]
+                os.waitpid(self._pid, os.WNOHANG)
             except (ChildProcessError, AttributeError):
                 pass
         if self._fd is not None:

@@ -161,7 +161,7 @@ export const home = {
     // {ts, actor, event, details_json, ...}. Map into the UI's
     // ActivityEvent shape.
     try {
-      const raw = await apiFetch<Array<Record<string, any>>>(
+      const raw = await apiFetch<Array<Record<string, unknown>>>(
         `/home/activity?limit=${Math.max(1, Math.min(200, limit))}`,
       );
       if (!Array.isArray(raw)) return [];

@@ -30,7 +30,7 @@ class WebhookUploader:
         auth_header = pick(config, "auth_header")
         if auth_header:
             self.auth_type = "raw"
-            self.raw_authorization = str(auth_header)
+            self.raw_authorization: str | None = str(auth_header)
         else:
             self.auth_type = pick(config, "auth_type", "auth", default="none")
             self.raw_authorization = None

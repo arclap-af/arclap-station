@@ -22,10 +22,11 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -300,7 +301,10 @@ def _check_upload_queue() -> Check:
 
 def _check_thermal() -> Check:
     try:
-        from arclap_station.telemetry.metrics import cpu_temp_celsius, throttled_flags  # noqa: PLC0415
+        from arclap_station.telemetry.metrics import (  # noqa: PLC0415
+            cpu_temp_celsius,
+            throttled_flags,
+        )
 
         t = cpu_temp_celsius()
         flags = throttled_flags()

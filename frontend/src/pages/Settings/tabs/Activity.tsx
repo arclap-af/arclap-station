@@ -26,7 +26,7 @@ const auditSchema = z.array(z.record(z.unknown()));
 
 async function fetchActivity(limit: number): Promise<AuditEvent[]> {
   const raw = await apiJson(`/settings/audit/recent?limit=${limit}`, auditSchema);
-  return raw.map((r: any) => ({
+  return raw.map((r) => ({
     id: Number(r.id ?? 0),
     ts: String(r.ts ?? ""),
     actor: String(r.actor ?? "system"),

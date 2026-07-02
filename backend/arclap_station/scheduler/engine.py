@@ -253,7 +253,10 @@ def fire_capture(schedule_id: str) -> dict[str, Any]:
     # + bandwidth on static scenes overnight.
     try:
         from arclap_station.photos.dedup import (  # noqa: PLC0415
-            compute_dhash, store_hash, maybe_drop_duplicate, DEFAULT_THRESHOLD,
+            DEFAULT_THRESHOLD,
+            compute_dhash,
+            maybe_drop_duplicate,
+            store_hash,
         )
         from arclap_station.station_config import get_station_store  # noqa: PLC0415
 

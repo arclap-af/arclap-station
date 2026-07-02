@@ -73,14 +73,17 @@ class CameraWatchdog:
 
     def _load_state(self) -> dict[str, Any]:
         try:
-            return json.loads(self.state_path.read_text())
+            data = json.loads(self.state_path.read_text())
+            if isinstance(data, dict):
+                return data
         except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {
-                "fail_count": 0,
-                "reset_count": 0,
-                "last_reset_at": None,
-                "last_ok_at": None,
-            }
+            pass
+        return {
+            "fail_count": 0,
+            "reset_count": 0,
+            "last_reset_at": None,
+            "last_ok_at": None,
+        }
 
     def _save_state(self, state: dict[str, Any]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)

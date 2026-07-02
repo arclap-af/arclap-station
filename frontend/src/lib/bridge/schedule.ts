@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch, apiJson } from "../api";
+import { arr, obj } from "./json";
 
 // Flat shape the Schedule UI renders.
 export interface Schedule {
@@ -28,9 +29,9 @@ export const scheduleSchema = z.unknown();
 
 const DAY_SET = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const);
 
-function adaptSchedule(raw: Record<string, any>): Schedule {
-  const rawDays = Array.isArray(raw.days) ? raw.days : [];
-  const days = rawDays.filter((d: unknown): d is Schedule["days"][number] =>
+function adaptSchedule(raw: Record<string, unknown>): Schedule {
+  const conditions = obj(raw.conditions);
+  const days = arr(raw.days).filter((d): d is Schedule["days"][number] =>
     typeof d === "string" && DAY_SET.has(d as Schedule["days"][number]),
   );
   return {
@@ -46,9 +47,9 @@ function adaptSchedule(raw: Record<string, any>): Schedule {
     to_time: String(raw.to_time ?? "19:00"),
     days,
     enabled: Boolean(raw.enabled),
-    skip_disk_full: Boolean(raw.skip_disk_full ?? raw.conditions?.skip_disk_full),
+    skip_disk_full: Boolean(raw.skip_disk_full ?? conditions.skip_disk_full),
     skip_destinations_offline: Boolean(
-      raw.skip_destinations_offline ?? raw.conditions?.skip_destinations_offline,
+      raw.skip_destinations_offline ?? conditions.skip_destinations_offline,
     ),
     destination_id:
       typeof raw.destination_id === "string"

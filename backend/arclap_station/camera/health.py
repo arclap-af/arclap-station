@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -53,9 +53,10 @@ def _path() -> Path:
 
 def _read() -> dict[str, Any]:
     try:
-        return json.loads(_path().read_text())
+        data = json.loads(_path().read_text())
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _write(payload: dict[str, Any]) -> None:
@@ -155,9 +156,7 @@ def _record_flap(payload: dict[str, Any]) -> None:
         payload["recoveries"] = []
 
 
-def _timedelta_sec(s: float):  # noqa: ANN202 (return type irrelevant)
-    from datetime import timedelta  # noqa: PLC0415
-
+def _timedelta_sec(s: float) -> timedelta:
     return timedelta(seconds=s)
 
 

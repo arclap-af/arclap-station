@@ -31,7 +31,7 @@ def cpu_temp_celsius() -> float | None:
     if raw and raw.isdigit():
         return round(int(raw) / 1000.0, 1)
     try:
-        temps = psutil.sensors_temperatures()  # type: ignore[attr-defined]
+        temps = psutil.sensors_temperatures()
         for name, entries in temps.items():
             if entries:
                 return float(entries[0].current)
@@ -108,7 +108,7 @@ def network_throughput_mbps() -> float | None:
         return None
     dt = max(0.001, now - prev["ts"])
     dbytes = max(0, cur_bytes - prev["bytes"])
-    mbps = (dbytes * 8) / (1_000_000.0 * dt)
+    mbps: float = (dbytes * 8) / (1_000_000.0 * dt)
     return round(mbps, 2)
 
 

@@ -81,8 +81,10 @@ def _build_snapshot() -> dict[str, Any]:
         except ValueError:
             pass
 
-    queue_stats = queue.stats()
-    queue_stats["avg_upload_seconds"] = queue.avg_upload_seconds()
+    queue_stats: dict[str, float] = {
+        **queue.stats(),
+        "avg_upload_seconds": queue.avg_upload_seconds(),
+    }
 
     captures_24h = photos.count_since(one_day_ago)
     disk_pct = float(metrics.get("disk_used_pct") or 0)

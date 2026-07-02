@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "arclap-station"
-version = "0.9.10"
+version = "0.9.11"
 description = "Arclap Station — on-device control plane for Raspberry Pi 5 tethered to a DSLR."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -87,6 +87,7 @@ ignore = [
     "B008",  # FastAPI Depends() in defaults is idiomatic
     "B904",  # raise from in some HTTPException paths is noisy
     "N818",  # exception classes ending with Error
+    "N814",  # `from pathlib import Path as _P` — deliberate aliased lazy-import convention
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -110,6 +111,9 @@ module = [
     "paho.mqtt.*",
     "keyring",
     "keyring.*",
+    "smbus2",
+    "sentry_sdk",
+    "sentry_sdk.*",
 ]
 ignore_missing_imports = true
 

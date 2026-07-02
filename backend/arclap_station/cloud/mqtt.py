@@ -23,9 +23,7 @@ import json
 import logging
 import socket
 import threading
-import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from arclap_station.config import get_settings
@@ -87,7 +85,8 @@ class MqttPublisher:
             store_path = get_settings().paths.etc / "station.json"
             if store_path.exists():
                 d = json.loads(store_path.read_text())
-                return d.get("broker")
+                broker = d.get("broker")
+                return broker if isinstance(broker, str) else None
         except (OSError, json.JSONDecodeError):
             pass
         return None

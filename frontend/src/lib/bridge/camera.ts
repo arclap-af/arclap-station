@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "../api";
+import { obj, strOrNull } from "./json";
 
 // Flat shape the Camera page renders. All fields are strings to dodge
 // the variability of gphoto2 widget value types across camera models.
@@ -35,11 +36,9 @@ export type CameraProp = z.infer<typeof cameraPropSchema>;
 
 // Extract a string value from gphoto2's nested widget tree. The backend
 // returns `{ "/main/imgsettings/iso": {value:"400", choices:[...]}, ... }`.
-function adaptSettings(raw: Record<string, any>): CameraSettings {
+function adaptSettings(raw: Record<string, unknown>): CameraSettings {
   const get = (path: string, fallback = "—"): string => {
-    const w = raw?.[path];
-    if (!w) return fallback;
-    const v = w.value;
+    const v = obj(raw[path]).value;
     if (v === null || v === undefined || v === "") return fallback;
     return String(v);
   };
@@ -115,29 +114,29 @@ export interface CameraInfo {
 
 export const camera = {
   async info(): Promise<CameraInfo> {
-    const raw = await apiFetch<Record<string, any>>("/camera/info");
-    const h = (raw?.health ?? {}) as Record<string, any>;
+    const raw = await apiFetch<Record<string, unknown>>("/camera/info");
+    const h = obj(raw.health);
     return {
-      detected: Boolean(raw?.detected),
-      model: raw?.model ?? null,
-      lens: raw?.lens ?? null,
-      battery: raw?.battery ?? null,
-      port: raw?.port ?? null,
-      shutter_count: typeof raw?.shutter_count === "number" ? raw.shutter_count : null,
-      values: (raw?.values ?? {}) as Partial<Record<keyof CameraSettings, string>>,
-      choices: (raw?.choices ?? {}) as Partial<Record<keyof CameraSettings, string[]>>,
+      detected: Boolean(raw.detected),
+      model: strOrNull(raw.model),
+      lens: strOrNull(raw.lens),
+      battery: strOrNull(raw.battery),
+      port: strOrNull(raw.port),
+      shutter_count: typeof raw.shutter_count === "number" ? raw.shutter_count : null,
+      values: (raw.values ?? {}) as Partial<Record<keyof CameraSettings, string>>,
+      choices: (raw.choices ?? {}) as Partial<Record<keyof CameraSettings, string[]>>,
       health: {
-        ok: Boolean(h?.ok),
-        last_ok_at: h?.last_ok_at ?? null,
-        last_error: h?.last_error ?? null,
-        last_error_at: h?.last_error_at ?? null,
-        last_reset_at: h?.last_reset_at ?? null,
-        beacon_age_sec: typeof h?.beacon_age_sec === "number" ? h.beacon_age_sec : null,
+        ok: Boolean(h.ok),
+        last_ok_at: strOrNull(h.last_ok_at),
+        last_error: strOrNull(h.last_error),
+        last_error_at: strOrNull(h.last_error_at),
+        last_reset_at: strOrNull(h.last_reset_at),
+        beacon_age_sec: typeof h.beacon_age_sec === "number" ? h.beacon_age_sec : null,
       },
     };
   },
   async settings(): Promise<CameraSettings> {
-    const raw = await apiFetch<Record<string, any>>("/camera/settings");
+    const raw = await apiFetch<Record<string, unknown>>("/camera/settings");
     return adaptSettings(raw);
   },
   async updateSettings(patch: Partial<CameraSettings>): Promise<CameraSettings> {
@@ -165,19 +164,20 @@ export const camera = {
     await apiFetch("/camera/usb-reset", { method: "POST" });
   },
   async properties(): Promise<CameraProp[]> {
-    const raw = await apiFetch<Record<string, any>>("/camera/properties");
+    const raw = await apiFetch<Record<string, unknown>>("/camera/properties");
     if (Array.isArray(raw)) return raw as CameraProp[];
     // Backend returns a path-keyed dict — flatten to a sorted list.
     return Object.values(raw ?? {})
-      .filter((w: any) => w && typeof w === "object" && "path" in w)
-      .map((w: any) => ({
+      .map(obj)
+      .filter((w) => "path" in w && Boolean(w.path))
+      .map((w) => ({
         path: String(w.path),
         label: w.label ? String(w.label) : undefined,
         type: w.type ? String(w.type) : undefined,
-        value: w.value ?? null,
+        value: (w.value ?? null) as CameraProp["value"],
         choices: Array.isArray(w.choices) ? w.choices.map(String) : null,
         readonly: Boolean(w.readonly),
-      })) as CameraProp[];
+      }));
   },
   async setProperty(path: string, value: string): Promise<void> {
     await apiFetch("/camera/settings", { method: "PUT", body: { path, value } });

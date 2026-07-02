@@ -108,8 +108,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Runs every 5 min; the first run is delayed 60s so startup settles
     # (camera enumerate, queue drain) before the first verdict.
     async def _health_loop() -> None:
-        from arclap_station.health.selftest import run_selftest  # noqa: PLC0415
         from arclap_station.health import alerts as _alerts  # noqa: PLC0415
+        from arclap_station.health.selftest import run_selftest  # noqa: PLC0415
 
         await asyncio.sleep(60)
         while True:
@@ -240,7 +240,8 @@ def create_app() -> FastAPI:
     # Prometheus middleware — instruments every request with a counter
     # + latency histogram. Output lives at /metrics (no auth, loopback
     # only). Cost: a dict lookup + 1 lock per request, ~1µs.
-    from arclap_station.metrics_prom import PrometheusMiddleware, render as _prom_render  # noqa: PLC0415
+    from arclap_station.metrics_prom import PrometheusMiddleware  # noqa: PLC0415
+    from arclap_station.metrics_prom import render as _prom_render
 
     app.add_middleware(PrometheusMiddleware)
 

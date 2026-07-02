@@ -39,10 +39,10 @@ async def system_info(_: dict[str, Any] = Depends(require_session)) -> dict[str,
     """Consolidated station card — the single payload a fleet view needs
     to render one station: identity, version, health, and the headline
     activity counters. Cheap; safe to poll."""
+    from arclap_station.db import get_db  # noqa: PLC0415
     from arclap_station.health import alerts as _alerts  # noqa: PLC0415
     from arclap_station.station_config import get_station_store  # noqa: PLC0415
     from arclap_station.telemetry.metrics import snapshot, uptime_seconds  # noqa: PLC0415
-    from arclap_station.db import get_db  # noqa: PLC0415
 
     cfg = get_station_store().load()
     health_state = _alerts.read_state()

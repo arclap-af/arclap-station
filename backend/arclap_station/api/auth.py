@@ -113,7 +113,6 @@ def _pin_age_days_from_disk() -> int | None:
 
     A change-pin call writes a new file so mtime tracks PIN-set events.
     Returns None if the file's missing (no PIN set yet)."""
-    import os as _os  # noqa: PLC0415
     import time as _time  # noqa: PLC0415
 
     from arclap_station.config import get_settings  # noqa: PLC0415

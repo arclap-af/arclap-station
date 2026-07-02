@@ -174,7 +174,8 @@ def export_signed(
     """
     import base64  # noqa: PLC0415
     import hashlib  # noqa: PLC0415
-    from datetime import UTC as _UTC, datetime as _dt  # noqa: PLC0415
+    from datetime import UTC as _UTC  # noqa: PLC0415
+    from datetime import datetime as _dt
 
     from arclap_station import __version__  # noqa: PLC0415
     from arclap_station.config import get_settings  # noqa: PLC0415
@@ -240,11 +241,16 @@ def export_signed(
     key_path = get_settings().paths.etc / "audit-export.key"
     if key_path.exists():
         try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (  # noqa: PLC0415
+                Ed25519PrivateKey,
+            )
             from cryptography.hazmat.primitives.serialization import (  # noqa: PLC0415
                 load_pem_private_key,
             )
 
             key = load_pem_private_key(key_path.read_bytes(), password=None)
+            if not isinstance(key, Ed25519PrivateKey):
+                raise TypeError("audit-export.key must be an Ed25519 private key")
             sig = key.sign(fingerprint.encode("ascii"))
             bundle["fingerprint_signed"] = base64.b64encode(sig).decode("ascii")
             bundle["fingerprint_alg"] = "sha256+ed25519"
