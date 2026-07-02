@@ -1142,15 +1142,21 @@ update_inplace() {
   wheel="$(arclap_wheel_path)"
   "${target}/venv/bin/pip" install --quiet "${wheel}"
 
-  ln -sfn "${target}/venv" "${ARCLAP_PREFIX}/venv.next"
-  mv -Tf "${ARCLAP_PREFIX}/venv.next" "${ARCLAP_PREFIX}/venv"
+  # Swap the venv robustly whether the current one is a real directory
+  # (what install.sh creates) or a symlink. The old `mv -Tf venv.next venv`
+  # failed with "cannot overwrite directory" when venv was a real dir, so
+  # the update aborted half-done.
+  rm -rf "${ARCLAP_PREFIX}/venv"
+  mv -T "${target}/venv" "${ARCLAP_PREFIX}/venv"
 
   # Frontend.
   rm -rf "${ARCLAP_WEBROOT:?}"/*
   tar -xzf "${ARCLAP_TMPDIR}/arclap-station-frontend.tar.gz" -C "${ARCLAP_WEBROOT}"
 
-  # Socket-activated restart preserves listening sockets.
-  systemctl restart arclap-station.service arclap-uploader.service
+  # Restart the service. (arclap-uploader.service is intentionally not
+  # deployed — the uploader runs in-process — so we must not name it here;
+  # `systemctl restart` on a missing unit fails the whole command.)
+  systemctl restart arclap-station.service
   ok "Update complete."
 }
 

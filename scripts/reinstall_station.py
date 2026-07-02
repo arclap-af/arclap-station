@@ -12,9 +12,11 @@ What it does, in order:
     1. SSH connectivity check (needs key-based auth; password prompts will hang)
     2. Stop arclap-station + caddy services if running
     3. Disable + remove old arclap-* systemd units
-    4. Wipe install dirs:
-         /opt/arclap-station   /var/www/arclap   /etc/arclap
-         /var/lib/arclap   (and /media/sdcard/photos with --purge-photos)
+    4. Replace installed code (/opt/arclap-station, /var/www/arclap).
+       STATE IS PRESERVED by default — the PIN, destination secrets, the
+       DB and the audit log (/etc/arclap + /var/lib/arclap) survive a
+       reinstall. Use --purge-state for a true factory reset; --purge-photos
+       also deletes /media/sdcard/photos.
     5. apt update + install git (skipped if --no-apt)
     6. git clone the repo into /tmp/arclap-station (or pull --depth 1)
     7. sudo bash install.sh
@@ -56,13 +58,20 @@ DEFAULT_REPO = "https://github.com/arclap-af/arclap-station.git"
 DEFAULT_BRANCH = "main"
 HEALTH_TIMEOUT_SEC = 180
 
-# Paths the installer creates that we need to wipe for a "fresh" reinstall.
-STATE_PATHS = [
+# Installed CODE / assets — always replaced on a reinstall (they're just
+# the software; install.sh recreates them).
+CODE_PATHS = [
     "/opt/arclap-station",
     "/var/www/arclap",
+]
+# STATE — the PIN (auth.json), destination secrets (dest.key), the SQLite
+# DB and the hash-chained audit log. PRESERVED by default so a software
+# reinstall doesn't lock the operator out or lose destination credentials;
+# wiped only with --purge-state (a true factory reset). Photos + logs have
+# their own flags.
+STATE_DIRS = [
     "/etc/arclap",
     "/var/lib/arclap",
-    "/var/log/arclap",
 ]
 
 # Systemd units that may be installed from a previous run.
@@ -185,21 +194,30 @@ def remove_units(remote: Remote) -> None:
     remote.run("systemctl daemon-reload", sudo=True, check=False)
     ok(f"{len(LEGACY_UNITS)} legacy unit files removed")
 
-def wipe_state(remote: Remote, *, purge_photos: bool, purge_logs: bool) -> None:
-    """Step 4 — wipe install directories. Photos default to KEPT unless --purge-photos."""
-    paths = list(STATE_PATHS)
+def wipe_state(remote: Remote, *, purge_state: bool, purge_photos: bool, purge_logs: bool) -> None:
+    """Step 4 — replace installed code; PRESERVE state (PIN/secrets/DB/audit)
+    unless --purge-state. Photos + logs kept unless their own flag is set."""
+    paths = list(CODE_PATHS)
+    if purge_state:
+        paths += STATE_DIRS
     if purge_photos:
         paths.append("/media/sdcard/photos")
-    if not purge_logs:
-        paths.remove("/var/log/arclap")
+    if purge_logs:
+        paths.append("/var/log/arclap")
     for p in paths:
         remote.run(f"rm -rf {shlex.quote(p)}", sudo=True, check=False)
+    # Regenerated-by-installer config drop-ins (caddy/udev/polkit/…) — safe
+    # to clear so stale-content versions don't survive.
     for f in LEGACY_FILES:
         remote.run(f"rm -f {shlex.quote(f)}", sudo=True, check=False)
-    # Drop arclap user + group too — install.sh recreates with the right uid.
-    remote.run("userdel -r arclap 2>/dev/null || true; groupdel arclap 2>/dev/null || true",
-               sudo=True, check=False)
-    ok(f"wiped {len(paths)} state dirs + {len(LEGACY_FILES)} config files + arclap user")
+    if purge_state:
+        # arclap's home is /var/lib/arclap; only drop the user when we're
+        # actually purging state (install.sh recreates it).
+        remote.run("userdel -r arclap 2>/dev/null || true; groupdel arclap 2>/dev/null || true",
+                   sudo=True, check=False)
+    ok(f"replaced {len(CODE_PATHS)} code dirs + {len(LEGACY_FILES)} config files")
+    ok("STATE (PIN + secrets + DB + audit): "
+       + ("WIPED — factory reset (--purge-state)" if purge_state else "PRESERVED"))
     if not purge_photos:
         ok("/media/sdcard/photos kept (use --purge-photos to nuke)")
 
@@ -295,6 +313,9 @@ def main() -> int:
                    help=f"Branch or tag to install (default {DEFAULT_BRANCH})")
     p.add_argument("--purge-photos", action="store_true",
                    help="ALSO delete /media/sdcard/photos. DESTRUCTIVE — defaults off.")
+    p.add_argument("--purge-state", action="store_true",
+                   help="ALSO wipe /etc/arclap + /var/lib/arclap (PIN, secrets, DB, audit) — "
+                        "a factory reset; you'll re-run the Setup wizard. Defaults off (state PRESERVED).")
     p.add_argument("--purge-logs", action="store_true",
                    help="Wipe /var/log/arclap too. Default keeps logs for forensics.")
     p.add_argument("--no-apt", action="store_true",
@@ -311,6 +332,7 @@ def main() -> int:
     echo(f"  target:        {remote.addr}:{remote.port}")
     echo(f"  repo:          {args.repo} @ {args.branch}")
     echo(f"  purge photos:  {'YES — irreversible' if args.purge_photos else 'no (kept)'}")
+    echo(f"  purge state:   {'YES — PIN/secrets/DB/audit erased' if args.purge_state else 'no (PRESERVED)'}")
     echo(f"  purge logs:    {'yes' if args.purge_logs else 'no (kept)'}")
     echo(f"  apt update:    {'skipped' if args.no_apt else 'yes'}")
     if not args.yes:
@@ -330,7 +352,7 @@ def main() -> int:
     remove_units(remote)
 
     step(4, total, "Wiping install state")
-    wipe_state(remote, purge_photos=args.purge_photos, purge_logs=args.purge_logs)
+    wipe_state(remote, purge_state=args.purge_state, purge_photos=args.purge_photos, purge_logs=args.purge_logs)
 
     step(5, total, "apt update + install git + curl")
     apt_install(remote, skip=args.no_apt)
