@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from arclap_station.uploaders import UploadError, pick, pick_bool, register
+from arclap_station.uploaders import UploadError, expand_placeholders, pick, pick_bool, register
 
 
 class FTPUploader:
@@ -25,16 +25,23 @@ class FTPUploader:
         self.port = int(pick(config, "port", default=21))
         self.username = pick(config, "username", "user", "login", default="anonymous")
         self.password = pick(config, "password", "passwd", "pass", default="")
-        self.root = str(pick(config, "path", "remote_path", "root", default="/")).rstrip("/") or "/"
+        self.root = expand_placeholders(
+            str(pick(config, "path", "remote_path", "root", default="/"))
+        ).rstrip("/") or "/"
         # `passive` is the canonical key; `mode == "passive"` or "active" is
         # the UI form. `security` field from the UI form maps to `tls`.
         self.passive = pick_bool(
             config, "passive",
             default=str(pick(config, "mode", default="passive")).lower() == "passive",
         )
-        # UI sends `security: "ftps" | "ftp"`; backend reads `tls: bool`.
+        # UI sends `security: "ftps" | "ftp"`; backend reads `tls: bool`. The
+        # generic "Encrypt in transit" toggle now actually does something
+        # for FTP (the only plaintext-capable type) instead of being a lie:
+        # when it's on we force FTPS.
         sec = str(pick(config, "security", default="")).lower()
-        self.use_tls = pick_bool(config, "tls", "ftps", default=sec in ("ftps", "tls"))
+        self.use_tls = pick_bool(
+            config, "tls", "ftps", "encrypt_in_transit", default=sec in ("ftps", "tls")
+        )
         self.timeout = float(pick(config, "timeout_seconds", "timeout", default=15))
 
     def _connect(self) -> ftplib.FTP:

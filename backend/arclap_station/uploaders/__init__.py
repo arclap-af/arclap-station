@@ -53,6 +53,31 @@ def pick(config: dict[str, Any], *keys: str, default: Any = None) -> Any:
     return default
 
 
+def expand_placeholders(template: str, when: Any = None, station: str = "") -> str:
+    """Expand {yyyy}{yy}{mm}{dd}{HH}{MM}{ts}{station} in a path template.
+
+    Without this, a template like 'photos/{yyyy}/{mm}/{dd}/' created a
+    LITERAL '{yyyy}' directory at the destination on every upload. The
+    photo key already carries the date path, so the default templates no
+    longer include date placeholders — but any an operator adds are now
+    expanded rather than written verbatim.
+    """
+    if not template or "{" not in template:
+        return template
+    from datetime import datetime  # noqa: PLC0415
+    w = when or datetime.now()
+    repl = {
+        "{yyyy}": f"{w.year:04d}", "{yy}": f"{w.year % 100:02d}",
+        "{mm}": f"{w.month:02d}", "{dd}": f"{w.day:02d}",
+        "{HH}": f"{w.hour:02d}", "{MM}": f"{w.minute:02d}",
+        "{ts}": str(int(w.timestamp())), "{station}": station or "station",
+    }
+    out = template
+    for k, v in repl.items():
+        out = out.replace(k, v)
+    return out
+
+
 def pick_bool(config: dict[str, Any], *keys: str, default: bool = False) -> bool:
     """Same as pick() but coerces to bool (handles 'true'/'false' strings)."""
     v = pick(config, *keys, default=default)

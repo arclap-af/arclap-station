@@ -11,7 +11,7 @@ from typing import Any
 import paramiko
 from paramiko.ssh_exception import SSHException
 
-from arclap_station.uploaders import UploadError, pick, pick_bool, register
+from arclap_station.uploaders import UploadError, expand_placeholders, pick, pick_bool, register
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,9 @@ class SFTPUploader:
         self.host_key_fp = pick(config, "host_key_fingerprint", "fingerprint")
         # Default to '.' (cwd of the SFTP login) so users who don't set a
         # remote path get a sensible target.
-        self.root = str(pick(config, "path", "remote_path", "root", default=".")).rstrip("/")
+        self.root = expand_placeholders(
+            str(pick(config, "path", "remote_path", "root", default="."))
+        ).rstrip("/")
         if not self.root:
             self.root = "."
         self.timeout = float(pick(config, "timeout_seconds", "timeout", default=15))
@@ -46,6 +48,21 @@ class SFTPUploader:
         # operator to paste a host key fingerprint mid-test. Document
         # in the form that production deployments should set it True.
         self.strict_host = pick_bool(config, "strict_host_key", "strict_host", default=False)
+
+    def _load_private_key(self) -> Any:
+        """Load the private key, trying modern types first. ssh-keygen
+        defaults to Ed25519 now; the old RSAKey-only path failed on every
+        Ed25519/ECDSA key an operator pasted in."""
+        errors: list[str] = []
+        for key_cls in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+            try:
+                return key_cls.from_private_key(
+                    io.StringIO(self.private_key_pem),
+                    password=self.private_key_passphrase or None,
+                )
+            except (paramiko.SSHException, ValueError) as exc:
+                errors.append(f"{key_cls.__name__}: {exc}")
+        raise UploadError("sftp: unsupported or invalid private key (" + "; ".join(errors[:2]) + ")")
 
     def _connect(self) -> paramiko.SSHClient:
         client = paramiko.SSHClient()
@@ -68,10 +85,7 @@ class SFTPUploader:
         if self.password:
             connect_kwargs["password"] = self.password
         if self.private_key_pem:
-            key = paramiko.RSAKey.from_private_key(
-                io.StringIO(self.private_key_pem), password=self.private_key_passphrase
-            )
-            connect_kwargs["pkey"] = key
+            connect_kwargs["pkey"] = self._load_private_key()
 
         try:
             client.connect(**connect_kwargs)

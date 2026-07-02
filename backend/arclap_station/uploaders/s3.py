@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from arclap_station.uploaders import UploadError, pick, register
+from arclap_station.uploaders import UploadError, expand_placeholders, pick, register
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +26,9 @@ class S3Uploader:
         if not bucket:
             raise ValueError("s3 uploader requires 'bucket'")
         self.bucket = bucket
-        self.prefix = str(pick(config, "prefix", "path", "key_prefix", default="")).lstrip("/")
+        self.prefix = expand_placeholders(
+            str(pick(config, "prefix", "path", "key_prefix", default=""))
+        ).lstrip("/")
         self.region = pick(config, "region", "aws_region", default="eu-central-1")
         self.endpoint_url = pick(config, "endpoint_url", "endpoint", "url")
         self.acl = pick(config, "acl")

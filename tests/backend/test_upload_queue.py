@@ -33,6 +33,19 @@ def test_recover_in_flight_resets_to_pending(fresh_db: Any, tmp_path: Path) -> N
     assert st == "pending"
 
 
+def test_requeue_failed_resets_to_pending(fresh_db: Any, tmp_path: Path) -> None:
+    d = get_manager().create("f", "ftp", {"host": "h"}, enabled=True)
+    p = get_store().register(tmp_path / "a.jpg", size_bytes=10)
+    q = UploadQueue()
+    (qid,) = q.enqueue(p.id, [d.id])
+    with get_db().tx() as conn:
+        conn.execute("UPDATE upload_queue SET state='failed_permanent', attempts=12 WHERE id=?", (qid,))
+    assert q.requeue_failed() == 1
+    with get_db().connect() as conn:
+        row = conn.execute("SELECT state, attempts FROM upload_queue WHERE id=?", (qid,)).fetchone()
+    assert row[0] == "pending" and row[1] == 0
+
+
 def test_mark_retry_writes_sqlite_datetime_format(fresh_db: Any, tmp_path: Path) -> None:
     d = get_manager().create("f", "ftp", {"host": "h"}, enabled=True)
     p = get_store().register(tmp_path / "a.jpg", size_bytes=10)

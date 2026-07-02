@@ -208,6 +208,13 @@ class PhotoStore:
                 Path(record.path).unlink(missing_ok=True)
             except OSError:
                 pass
+        # Drop the cached thumbnail too — otherwise the thumb cache grows
+        # without bound and quietly defeats the disk retention sweep.
+        try:
+            from arclap_station.photos.thumbnails import thumbnail_path  # noqa: PLC0415
+            thumbnail_path(Path(record.path)).unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
         return True
 
     def set_upload_state(self, photo_id: int, state: str) -> None:

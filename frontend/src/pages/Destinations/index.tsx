@@ -122,7 +122,7 @@ export function Destinations() {
       bucket: "",
       access_key: "",
       secret_key: "",
-      prefix: "photos/{yyyy}/{mm}/{dd}/",
+      prefix: "photos/",
     },
     sftp: {
       host: "",
@@ -132,7 +132,7 @@ export function Destinations() {
       password: "",
       private_key: "",
       private_key_passphrase: "",
-      remote_path: "/photos/{yyyy}/{mm}/{dd}/",
+      remote_path: "/photos/",
     },
     ftp: {
       host: "",
@@ -140,7 +140,7 @@ export function Destinations() {
       user: "",
       password: "",
       mode: "passive",
-      remote_path: "/photos/{yyyy}/{mm}/{dd}/",
+      remote_path: "/photos/",
       security: "plain",
     },
     local: {

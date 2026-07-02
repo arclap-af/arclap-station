@@ -198,16 +198,17 @@ def sweep(force: bool = False) -> SweepReport:
         except Exception:  # noqa: BLE001
             pass
 
-    # DB hygiene — once we've deleted rows, give SQLite a chance to
-    # actually reclaim space. WAL checkpoint truncates the write-ahead
-    # log, and VACUUM rebuilds the main file. Both are no-ops if there's
-    # nothing to do, so it's safe to run every night.
-    try:
-        with db.connect() as conn:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("VACUUM")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("DB vacuum failed: %s", exc)
+    # DB hygiene — only when we actually deleted rows. VACUUM rewrites the
+    # ENTIRE database file (it is NOT a no-op), so running it every night
+    # on an idle station is pure write-amplification on the SD card. Skip
+    # it unless the sweep freed something.
+    if deleted:
+        try:
+            with db.connect() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.execute("VACUUM")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("DB vacuum failed: %s", exc)
 
     finished = datetime.now(UTC)
     report = SweepReport(

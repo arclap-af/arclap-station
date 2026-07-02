@@ -99,10 +99,10 @@ export const gallery = {
   async star(id: string, starred: boolean): Promise<void> {
     await apiFetch(`/gallery/${id}/star`, { method: "POST", body: { starred } });
   },
-  async retry(_id: string, _destinationId: string): Promise<void> {
-    // Backend has /api/queue/retry (drain-once) at the queue level —
-    // a per-photo retry isn't wired. No-op for now.
-    return;
+  async retry(id: string, _destinationId: string): Promise<void> {
+    // Requeue this photo's failed/permanently-failed uploads, then the
+    // worker picks them up. The recovery path that used to be missing.
+    await apiFetch(`/queue/retry-failed?photo_id=${encodeURIComponent(id)}`, { method: "POST" });
   },
   async remove(id: string): Promise<void> {
     await apiFetch(`/gallery/${id}`, { method: "DELETE" });

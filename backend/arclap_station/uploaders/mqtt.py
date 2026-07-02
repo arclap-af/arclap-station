@@ -66,15 +66,22 @@ class MQTTUploader:
 
     def _client(self) -> mqtt.Client:
         api_version = getattr(mqtt, "CallbackAPIVersion", None)
+        # Unique client_id per connection. A fixed id shared across the 4
+        # concurrent queue workers triggers MQTT "duplicate client
+        # takeover" — the broker disconnects the older session, so
+        # publishes fail intermittently. A random suffix keeps each
+        # worker's connection distinct.
+        import uuid as _uuid  # noqa: PLC0415
+        cid = f"{self.client_id}-{_uuid.uuid4().hex[:8]}"
         if api_version is not None and hasattr(api_version, "VERSION2"):
             c = mqtt.Client(
                 api_version.VERSION2,
-                client_id=self.client_id,
+                client_id=cid,
                 clean_session=True,
             )
         else:
             # paho-mqtt < 2.0 fallback
-            c = mqtt.Client(client_id=self.client_id, clean_session=True)
+            c = mqtt.Client(client_id=cid, clean_session=True)
         if self.username:
             c.username_pw_set(self.username, self.password or "")
         if self.use_tls:

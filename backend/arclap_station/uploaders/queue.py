@@ -206,6 +206,32 @@ class UploadQueue:
             log.info("recovered %d stranded in_flight upload(s) after restart", n)
         return n
 
+    def requeue_failed(self, photo_id: int | None = None) -> int:
+        """Reset failed / failed_permanent rows back to pending so a
+        sustained-outage backlog can be re-driven from the cockpit.
+
+        Without this, once an item hit failed_permanent (12 attempts)
+        there was NO recovery path anywhere — the photo just never
+        uploaded. `photo_id=None` requeues everything; a specific id
+        powers the Gallery per-photo 'Retry upload' button.
+        """
+        where = "state IN ('failed', 'failed_permanent')"
+        params: list[Any] = []
+        if photo_id is not None:
+            where += " AND photo_id=?"
+            params.append(photo_id)
+        with self._db.tx() as conn:
+            cur = conn.execute(
+                f"UPDATE upload_queue SET state='pending', attempts=0, "
+                f"next_at=datetime('now'), updated_at=datetime('now') WHERE {where}",
+                params,
+            )
+        n = cur.rowcount
+        if n:
+            self._wakeup.set()
+            log.info("requeued %d failed upload(s) for retry", n)
+        return n
+
     def drain_once(self) -> int:
         """Process all currently-due items synchronously. Returns count processed."""
         processed = 0
