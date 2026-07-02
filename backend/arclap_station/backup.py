@@ -60,8 +60,11 @@ def take_snapshot() -> dict[str, Any]:
         return {"ok": False, "reason": "no_source_db"}
     now = datetime.now(UTC)
     out_path = _backup_root() / _snapshot_name(now)
+    import os as _os  # noqa: PLC0415
+
     # First: page-level copy to a temp .db file (online backup API).
     tmp_db = out_path.with_suffix(".db.tmp")
+    gz_tmp = out_path.with_suffix(".gz.tmp")
     try:
         src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
         dst = sqlite3.connect(tmp_db)
@@ -70,11 +73,18 @@ def take_snapshot() -> dict[str, Any]:
         finally:
             src.close()
             dst.close()
-        # Then: gzip into final filename.
-        with tmp_db.open("rb") as fin, gzip.open(out_path, "wb", compresslevel=6) as fout:
+        # Then: gzip into a temp file + atomic rename. Writing the final
+        # .gz in place meant an interrupted backup (power loss) left a
+        # truncated archive that a later restore would decompress into a
+        # corrupt DB — and it'd be the NEWEST snapshot, so restore picked
+        # it first.
+        with tmp_db.open("rb") as fin, gzip.open(gz_tmp, "wb", compresslevel=6) as fout:
             shutil.copyfileobj(fin, fout)
+            fout.flush()
+        _os.replace(gz_tmp, out_path)
     finally:
         tmp_db.unlink(missing_ok=True)
+        gz_tmp.unlink(missing_ok=True)
     size_bytes = out_path.stat().st_size
     pruned = _rotate_old_snapshots()
     result = {
@@ -147,19 +157,59 @@ def latest_snapshot() -> Path | None:
     return snaps[-1] if snaps else None
 
 
+def _snapshots_newest_first() -> list[Path]:
+    return sorted(_backup_root().glob("state-*.db.gz"), reverse=True)
+
+
+def _decompress_and_verify(snap: Path, dest_tmp: Path) -> bool:
+    """Decompress `snap` into `dest_tmp` and integrity-check the result.
+
+    True only if the archive decompresses AND the DB passes PRAGMA
+    integrity_check — so a truncated/corrupt snapshot is rejected before
+    we ever overwrite the live DB with it."""
+    try:
+        with gzip.open(snap, "rb") as fin, dest_tmp.open("wb") as fout:
+            shutil.copyfileobj(fin, fout)
+    except (OSError, EOFError, gzip.BadGzipFile):
+        dest_tmp.unlink(missing_ok=True)
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{dest_tmp}?mode=ro", uri=True, timeout=10.0)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            conn.close()
+        return bool(row and row[0] == "ok")
+    except sqlite3.Error:
+        return False
+
+
 def restore_latest() -> dict[str, Any]:
-    """Restore state.db from the newest backup, preserving the corrupt
-    original alongside for forensics. Returns {ok, restored_from, ...}."""
-    snap = latest_snapshot()
-    if snap is None:
+    """Restore state.db from the newest VALID backup.
+
+    Tries snapshots newest-first, decompressing + integrity-checking each
+    into a temp file before committing — so a corrupt/truncated newest
+    snapshot falls back to an older good one instead of leaving the
+    station with a broken DB. The corrupt live DB is moved aside for
+    forensics. Returns {ok, restored_from, ...}."""
+    import os as _os  # noqa: PLC0415
+
+    snaps = _snapshots_newest_first()
+    if not snaps:
         return {"ok": False, "reason": "no_backup"}
     db_path = get_settings().paths.state_db
-    # Move the corrupt DB (and its WAL sidecars) aside rather than
-    # deleting — an operator may want to data-recover from it later.
-    # Best-effort: if a sidecar can't be moved (still locked), removing
-    # it is enough; restoring a working DB matters more than keeping the
-    # broken one. The main-file move is also best-effort — we overwrite
-    # it below regardless.
+    tmp = Path(f"{db_path}.restoring")
+
+    chosen: Path | None = None
+    for snap in snaps:
+        if _decompress_and_verify(snap, tmp):
+            chosen = snap
+            break
+        tmp.unlink(missing_ok=True)
+    if chosen is None:
+        return {"ok": False, "reason": "no_valid_backup", "candidates": len(snaps)}
+
+    # Move the corrupt DB (and its WAL sidecars) aside — best-effort.
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     if db_path.exists():
         for suffix in ("", "-wal", "-shm"):
@@ -174,19 +224,13 @@ def restore_latest() -> dict[str, Any]:
                         p.unlink()
                     except OSError:
                         pass
-    # Decompress the snapshot into place via a temp file + atomic
-    # replace, so an interrupted restore can't leave a half-written DB.
     try:
-        tmp = Path(f"{db_path}.restoring")
-        with gzip.open(snap, "rb") as fin, tmp.open("wb") as fout:
-            shutil.copyfileobj(fin, fout)
-        import os as _os  # noqa: PLC0415
-
         _os.replace(tmp, db_path)
     except OSError as exc:
+        tmp.unlink(missing_ok=True)
         log.exception("restore_latest failed")
         return {"ok": False, "reason": "restore_error", "error": str(exc)}
-    return {"ok": True, "restored_from": snap.name}
+    return {"ok": True, "restored_from": chosen.name}
 
 
 def ensure_db_integrity_on_boot() -> dict[str, Any]:

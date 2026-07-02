@@ -79,6 +79,25 @@ def test_alert_fires_only_on_transition(tmp_path: Any) -> None:
         assert posts[-1]["type"] == "health_recovered"
 
 
+def test_alert_fires_on_warn_to_bad_escalation(tmp_path: Any) -> None:
+    """Regression: a station already at warn that goes bad MUST alert —
+    the old rule only degraded from ok/unknown, so warn->bad was masked."""
+    state_file = tmp_path / "health_state.json"
+    posts: list[dict[str, Any]] = []
+
+    with (
+        patch("arclap_station.health.alerts._state_path", return_value=state_file),
+        patch("arclap_station.health.alerts._alert_webhook", return_value="http://x"),
+        patch("arclap_station.health.alerts._post", side_effect=lambda u, p: posts.append(p) or True),
+        patch("arclap_station.health.alerts._station_summary", return_value={}),
+    ):
+        alerts.evaluate_and_alert({"overall": "warn", "score": 80, "checks": []})
+        assert len(posts) == 1  # ok -> warn : degrade
+        alerts.evaluate_and_alert({"overall": "bad", "score": 40, "checks": []})
+        assert len(posts) == 2, "warn -> bad escalation must alert"
+        assert posts[-1]["type"] == "health_alert"
+
+
 def test_no_webhook_no_post_but_still_persists(tmp_path: Any) -> None:
     state_file = tmp_path / "health_state.json"
     with (

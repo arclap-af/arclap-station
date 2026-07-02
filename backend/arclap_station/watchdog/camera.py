@@ -188,7 +188,7 @@ class CameraWatchdog:
                         "source": "beacon",
                     },
                 )
-            state.update(fail_count=0, reset_count=0, last_ok_at=now_iso)
+            state.update(fail_count=0, reset_count=0, last_ok_at=now_iso, firmware_locked_alerted=False)
             self._save_state(state)
             return 0
 
@@ -234,7 +234,7 @@ class CameraWatchdog:
                         "source": "gphoto2_probe",
                     },
                 )
-            state.update(fail_count=0, reset_count=0, last_ok_at=now_iso)
+            state.update(fail_count=0, reset_count=0, last_ok_at=now_iso, firmware_locked_alerted=False)
             self._save_state(state)
             return 0
 
@@ -267,14 +267,21 @@ class CameraWatchdog:
         # can replug.
         if state["reset_count"] >= MAX_RESETS_IN_A_ROW:
             if self._camera_enumerated():
-                _safe_audit(
-                    "camera.firmware_locked",
-                    {
-                        "fail_count": state["fail_count"],
-                        "resets": state["reset_count"],
-                        "needs": "physical_replug",
-                    },
-                )
+                # Latch — audit the lockout ONCE per episode, not on every
+                # 2-minute probe (which flooded the hash-chained audit log
+                # with duplicate camera.firmware_locked events until a
+                # physical replug). Cleared when the camera recovers.
+                if not state.get("firmware_locked_alerted"):
+                    _safe_audit(
+                        "camera.firmware_locked",
+                        {
+                            "fail_count": state["fail_count"],
+                            "resets": state["reset_count"],
+                            "needs": "physical_replug",
+                        },
+                    )
+                    state["firmware_locked_alerted"] = True
+                    self._save_state(state)
                 return 4
             _safe_audit(
                 "camera.watchdog_giving_up",

@@ -115,7 +115,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         while True:
             try:
                 result = await asyncio.to_thread(run_selftest)
-                _alerts.evaluate_and_alert(result)
+                # evaluate_and_alert may POST to the operator's webhook
+                # (blocking, up to 8s) — keep it off the event loop so a
+                # slow/dead webhook can't stall sd_notify petting and get
+                # the whole service watchdog-killed.
+                await asyncio.to_thread(_alerts.evaluate_and_alert, result)
                 # Safe-shutdown check piggybacks on the health cadence.
                 try:
                     from arclap_station.hardware.ups import maybe_safe_shutdown  # noqa: PLC0415

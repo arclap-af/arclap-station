@@ -141,8 +141,15 @@ def evaluate_and_alert(result: dict[str, Any]) -> None:
     if prev_overall == new_overall:
         return
 
-    degraded = new_overall in ("warn", "bad") and prev_overall in ("ok", "unknown", None)
-    recovered = new_overall == "ok" and prev_overall in ("warn", "bad")
+    # Alert on any SEVERITY ESCALATION and on full recovery to ok. The
+    # old rule only fired degrade from ok/unknown, so a station already
+    # at warn that then went BAD (e.g. warm disk, then the camera fails)
+    # never alerted — the single most important transition was masked.
+    _rank = {"ok": 0, "unknown": 0, None: 0, "warn": 1, "bad": 2}
+    prev_rank = _rank.get(prev_overall, 0)
+    new_rank = _rank.get(new_overall, 0)
+    degraded = new_rank > prev_rank
+    recovered = new_overall == "ok" and prev_rank > 0
     if not (degraded or recovered):
         return
 
