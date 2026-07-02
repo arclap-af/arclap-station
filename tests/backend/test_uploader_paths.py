@@ -25,6 +25,20 @@ def test_no_literal_braces_survive() -> None:
     assert "{" not in out and "}" not in out
 
 
+def test_ftp_ftps_selection_actually_encrypts() -> None:
+    """Regression: the form's default 'ftps_explicit' silently produced
+    PLAINTEXT FTP because the backend only matched literal 'ftps'."""
+    from arclap_station.uploaders.ftp import FTPUploader  # noqa: PLC0415
+
+    assert FTPUploader("i", "n", {"host": "h", "security": "ftps_explicit"}).use_tls is True
+    assert FTPUploader("i", "n", {"host": "h", "security": "ftps_implicit"}).use_tls is True
+    assert FTPUploader("i", "n", {"host": "h", "security": "plain"}).use_tls is False
+    # No Security field → plaintext unless the encrypt toggle is on.
+    assert FTPUploader("i", "n", {"host": "h"}).use_tls is False
+    assert FTPUploader("i", "n", {"host": "h", "encrypt_in_transit": True}).use_tls is True
+    assert FTPUploader("i", "n", {"host": "h", "security": "ftps_implicit"}).implicit_tls is True
+
+
 def test_sftp_loads_ed25519_key() -> None:
     """ssh-keygen's default key type (Ed25519) must load — the old
     RSAKey-only path failed on every modern key."""

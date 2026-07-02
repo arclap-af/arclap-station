@@ -4,12 +4,36 @@ from __future__ import annotations
 
 import ftplib
 import io
+import socket
 import ssl
 import time
 from pathlib import Path
 from typing import Any
 
 from arclap_station.uploaders import UploadError, expand_placeholders, pick, pick_bool, register
+
+
+class _ImplicitFTP_TLS(ftplib.FTP_TLS):
+    """FTPS *implicit* — TLS from the first byte (default port 990),
+    unlike explicit FTPS which starts plaintext and upgrades via AUTH TLS.
+    stdlib ftplib only speaks explicit, so we wrap the control socket in
+    TLS immediately on connect."""
+
+    def connect(self, host: str = "", port: int = 0, timeout: float = -999,
+                source_address: Any = None) -> str:
+        if host:
+            self.host = host
+        if port > 0:
+            self.port = port
+        if timeout != -999:
+            self.timeout = timeout  # type: ignore[assignment]
+        self.sock = socket.create_connection((self.host, self.port), self.timeout,
+                                              source_address=source_address)
+        self.af = self.sock.family
+        self.sock = self.context.wrap_socket(self.sock, server_hostname=self.host)
+        self.file = self.sock.makefile("r")  # type: ignore[assignment]
+        self.welcome = self.getresp()
+        return self.welcome
 
 
 class FTPUploader:
@@ -34,22 +58,31 @@ class FTPUploader:
             config, "passive",
             default=str(pick(config, "mode", default="passive")).lower() == "passive",
         )
-        # UI sends `security: "ftps" | "ftp"`; backend reads `tls: bool`. The
-        # generic "Encrypt in transit" toggle now actually does something
-        # for FTP (the only plaintext-capable type) instead of being a lie:
-        # when it's on we force FTPS.
+        # The Security select sends "ftps_explicit" (the DEFAULT),
+        # "ftps_implicit", or "plain". The old check only matched the
+        # literal "ftps"/"tls", so EVERY FTPS selection silently fell
+        # through to plaintext FTP with credentials in the clear. Any
+        # ftps* value must encrypt; "plain" is the only cleartext mode.
+        # The "Encrypt in transit" toggle also forces TLS.
         sec = str(pick(config, "security", default="")).lower()
+        tls_from_sec = sec.startswith("ftps") or sec == "tls"
         self.use_tls = pick_bool(
-            config, "tls", "ftps", "encrypt_in_transit", default=sec in ("ftps", "tls")
+            config, "tls", "ftps", "encrypt_in_transit", default=tls_from_sec
         )
+        self.implicit_tls = sec in ("ftps_implicit", "implicit")
         self.timeout = float(pick(config, "timeout_seconds", "timeout", default=15))
 
     def _connect(self) -> ftplib.FTP:
         if self.use_tls:
-            ftp: ftplib.FTP = ftplib.FTP_TLS(timeout=self.timeout, context=ssl.create_default_context())
+            ctx = ssl.create_default_context()
+            cls = _ImplicitFTP_TLS if self.implicit_tls else ftplib.FTP_TLS
+            ftp: ftplib.FTP = cls(timeout=self.timeout, context=ctx)
         else:
             ftp = ftplib.FTP(timeout=self.timeout)
-        ftp.connect(self.host, self.port, timeout=self.timeout)
+        port = self.port
+        if self.implicit_tls and port == 21:
+            port = 990  # implicit FTPS default port
+        ftp.connect(self.host, port, timeout=self.timeout)
         ftp.login(user=self.username, passwd=self.password)
         if self.use_tls and isinstance(ftp, ftplib.FTP_TLS):
             ftp.prot_p()
