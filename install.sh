@@ -1109,9 +1109,14 @@ uninstall_all() {
   rm -f /etc/avahi/services/arclap-station.service
   rm -f /etc/caddy/Caddyfile
   rm -f /usr/local/bin/arclap-station /usr/local/sbin/arclap-station-installer
-  rm -rf "${ARCLAP_PREFIX}" "${ARCLAP_WEBROOT}" "${ARCLAP_CONFDIR}" "${ARCLAP_LOGDIR}"
+  # NOTE: ARCLAP_CONFDIR (/etc/arclap) holds auth.json (the PIN) and
+  # dest.key (the envelope key that decrypts every destination secret).
+  # A plain uninstall must NOT delete it — otherwise the message below
+  # lies ("State preserved") and a reinstall comes back with no PIN and
+  # undecryptable destination credentials. It's removed ONLY on --purge.
+  rm -rf "${ARCLAP_PREFIX}" "${ARCLAP_WEBROOT}" "${ARCLAP_LOGDIR}"
   if [[ "${purge}" == "--purge" ]]; then
-    rm -rf "${ARCLAP_HOME}" "${ARCLAP_PHOTODIR}"
+    rm -rf "${ARCLAP_HOME}" "${ARCLAP_PHOTODIR}" "${ARCLAP_CONFDIR}"
   fi
 
   systemctl daemon-reload
@@ -1119,7 +1124,7 @@ uninstall_all() {
 
   ok "Arclap Station removed."
   if [[ "${purge}" != "--purge" ]]; then
-    info "State preserved under ${ARCLAP_HOME} and ${ARCLAP_PHOTODIR}. Re-run with --purge to delete."
+    info "State preserved under ${ARCLAP_HOME}, ${ARCLAP_PHOTODIR} and ${ARCLAP_CONFDIR} (PIN + secrets). Re-run with --purge to delete."
   fi
 }
 
