@@ -28,7 +28,6 @@ readonly ARCLAP_WEBROOT="/var/www/arclap"
 readonly ARCLAP_CONFDIR="/etc/arclap"
 readonly ARCLAP_LOGDIR="/var/log/arclap"
 readonly ARCLAP_PHOTODIR="/media/sdcard/photos"
-readonly ARCLAP_SOCKET="/run/arclap-station.sock"
 readonly ARCLAP_TMPDIR="/tmp/arclap-install-$$"
 # ARCLAP_PYTHON is resolved at runtime in pick_python(); we accept any
 # python3 >= 3.11 because the codebase doesn't use anything 3.12-or-later
@@ -37,22 +36,24 @@ readonly ARCLAP_TMPDIR="/tmp/arclap-install-$$"
 # ship 3.12 or 3.13. Pinning to 3.11 broke installs on those.
 ARCLAP_PYTHON=""
 
-# Colour helpers (no-op if stdout is not a TTY).
+# Colour helpers (no-op if stdout is not a TTY). Declared and assigned
+# separately so the printf return value isn't masked by `readonly` (SC2155).
 if [[ -t 1 ]]; then
-  readonly C_BOLD="$(printf '\033[1m')"
-  readonly C_RED="$(printf '\033[31m')"
-  readonly C_GREEN="$(printf '\033[32m')"
-  readonly C_YELLOW="$(printf '\033[33m')"
-  readonly C_BLUE="$(printf '\033[34m')"
-  readonly C_RESET="$(printf '\033[0m')"
+  C_BOLD="$(printf '\033[1m')"
+  C_RED="$(printf '\033[31m')"
+  C_GREEN="$(printf '\033[32m')"
+  C_YELLOW="$(printf '\033[33m')"
+  C_BLUE="$(printf '\033[34m')"
+  C_RESET="$(printf '\033[0m')"
 else
-  readonly C_BOLD=""
-  readonly C_RED=""
-  readonly C_GREEN=""
-  readonly C_YELLOW=""
-  readonly C_BLUE=""
-  readonly C_RESET=""
+  C_BOLD=""
+  C_RED=""
+  C_GREEN=""
+  C_YELLOW=""
+  C_BLUE=""
+  C_RESET=""
 fi
+readonly C_BOLD C_RED C_GREEN C_YELLOW C_BLUE C_RESET
 
 # ---------------------------------------------------------------------------
 # Logging helpers
@@ -1134,7 +1135,8 @@ update_inplace() {
   fetch_release
 
   # Side-by-side venv at /opt/arclap-station/releases/<version> and swap a symlink.
-  local target="${ARCLAP_PREFIX}/releases/$(date +%s)"
+  local target
+  target="${ARCLAP_PREFIX}/releases/$(date +%s)"
   install -d -m 0755 "${target}"
   "${ARCLAP_PYTHON}" -m venv "${target}/venv"
   "${target}/venv/bin/pip" install --upgrade --quiet pip

@@ -52,9 +52,9 @@ def apply_watermark_and_rotate(path: Path, *, force: bool = False) -> bool:
         with Image.open(str(path)) as img:
             # ImageOps.exif_transpose() reads Orientation and applies
             # the rotation, returning a new image with the tag stripped.
+            # Without in_place it always returns an image (never None) on
+            # our pinned Pillow ≥11, so no None-guard is needed.
             rotated = ImageOps.exif_transpose(img)
-            if rotated is None:
-                rotated = img.copy()
             changed = rotated.size != img.size or rotated.getexif() != img.getexif()
             if want_wm:
                 _draw_watermark(rotated, cfg)
