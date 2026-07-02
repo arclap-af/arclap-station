@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
@@ -62,21 +62,37 @@ export function Gallery() {
   const [open, setOpen] = useState<Photo | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  const PAGE = 200;
   const {
-    data: photos = [],
+    data,
     refetch,
     isFetching,
     dataUpdatedAt,
-  } = useQuery({
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ["gallery", filter, query],
-    queryFn: () => gallery.list({ filter, query }),
-    // Auto-refresh every 10 s so newly-captured photos appear without
-    // the operator having to manually click Refresh after every
-    // scheduled capture. The Refresh button + "Updated Xs ago"
-    // indicator below make the auto-poll cadence visible.
+    // Paginated so a station with thousands of photos isn't silently
+    // capped at the first 100 (counts, Select-all and Delete-all used to
+    // operate only on that first page).
+    queryFn: ({ pageParam }) =>
+      gallery.listPage({ filter, query, limit: PAGE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.items.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
+    // Auto-refresh every 10 s so newly-captured photos appear without a
+    // manual click. Infinite queries refetch all loaded pages.
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
   });
+  const photos: Photo[] = useMemo(
+    () => (data?.pages ?? []).flatMap((p) => p.items),
+    [data],
+  );
+  const total = data?.pages?.[0]?.total ?? photos.length;
 
   // Tick once per second so the "Updated Xs ago" label is live.
   const [now, setNow] = useState(() => Date.now());
@@ -109,6 +125,15 @@ export function Gallery() {
     mutationFn: ({ id, destinationId }: { id: string; destinationId: string }) => gallery.retry(id, destinationId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["gallery"] }),
   });
+  const bulkDeleteMut = useMutation({
+    mutationFn: gallery.bulkDelete,
+    onSuccess: () => {
+      clearSel();
+      qc.invalidateQueries({ queryKey: ["gallery"] });
+    },
+    onError: (e) =>
+      window.alert("Delete failed: " + (e instanceof Error ? e.message : String(e))),
+  });
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -136,24 +161,21 @@ export function Gallery() {
   };
 
   const deleteSelected = () => {
+    if (selected.size === 0) return;
     if (!window.confirm(`Delete ${selected.size} photo(s) from the SD card? Remote copies on configured destinations are preserved.`)) return;
-    Array.from(selected).forEach((id) => removeMut.mutate(id));
-    clearSel();
+    // One request with error handling — not N fire-and-forget mutations.
+    bulkDeleteMut.mutate({ ids: Array.from(selected) });
   };
 
   const deleteAll = () => {
     // Two-step confirm — first the count, then the literal word so a
-    // mis-click can't wipe the gallery. Mirrors how the System tab's
-    // factory-reset is gated.
-    const n = photos.length;
-    if (n === 0) return;
-    if (!window.confirm(`Delete ALL ${n} photo(s) from the SD card?\n\nRemote copies are preserved. This cannot be undone locally.`)) return;
-    const typed = window.prompt(`Type DELETE to confirm removing ${n} photos.`);
+    // mis-click can't wipe the gallery. Deletes the WHOLE matching set
+    // server-side (not just the loaded page).
+    if (total === 0) return;
+    if (!window.confirm(`Delete ALL ${total} photo(s) matching this view?\n\nRemote copies are preserved. This cannot be undone locally.`)) return;
+    const typed = window.prompt(`Type DELETE to confirm removing ${total} photos.`);
     if (typed !== "DELETE") return;
-    // Fire deletes in order; the mutation invalidates the gallery
-    // query on every success so the count visibly counts down.
-    photos.forEach((p) => removeMut.mutate(p.id));
-    clearSel();
+    bulkDeleteMut.mutate({ all: true, filter, query });
   };
 
   const totalBytes = photos.reduce((s, p) => s + p.size_bytes, 0);
@@ -166,7 +188,7 @@ export function Gallery() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14, gap: 12 }}>
           <div>
             <h1 className="as-h1">Gallery</h1>
-            <div className="as-h1-sub">Every photo captured by this station · {photos.length} files · {fmtBytes(totalBytes)}</div>
+            <div className="as-h1-sub">Every photo captured by this station · {total} files{photos.length < total ? ` (${photos.length} loaded)` : ""} · {fmtBytes(totalBytes)}</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span
@@ -214,7 +236,7 @@ export function Gallery() {
           />
           <div style={{ display: "flex", border: "1px solid var(--as-line)", borderRadius: 8, overflow: "hidden" }}>
             {([
-              ["all", `All · ${photos.length}`],
+              ["all", `All · ${total}`],
               ["uploaded", `Uploaded · ${uploaded}`],
               ["pending", `Pending · ${pending}`],
               ["starred", "Starred"],
@@ -344,6 +366,14 @@ export function Gallery() {
             </div>
           </div>
         ))}
+
+        {hasNextPage && (
+          <div style={{ textAlign: "center", marginTop: 4, marginBottom: 8 }}>
+            <Button onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+              {isFetchingNextPage ? "Loading…" : `Load more · ${photos.length} of ${total}`}
+            </Button>
+          </div>
+        )}
 
         {photos.length === 0 && (
           <div className="as-card" style={{ padding: 0 }}>

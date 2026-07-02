@@ -210,6 +210,14 @@ def sweep(force: bool = False) -> SweepReport:
         except Exception as exc:  # noqa: BLE001
             log.warning("DB vacuum failed: %s", exc)
 
+    # Bound the audit log so it can't grow without limit over a multi-year
+    # deployment (chain-preserving prune via an anchor).
+    try:
+        from arclap_station.audit import prune as _audit_prune  # noqa: PLC0415
+        _audit_prune()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("audit prune failed: %s", exc)
+
     finished = datetime.now(UTC)
     report = SweepReport(
         started_at=now.isoformat(),

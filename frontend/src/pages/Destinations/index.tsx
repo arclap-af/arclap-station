@@ -52,6 +52,8 @@ export function Destinations() {
       setTestRanOk(false);
     },
   });
+  const onMutErr = (verb: string) => (e: unknown) =>
+    window.alert(`Could not ${verb} destination: ${e instanceof Error ? e.message : String(e)}`);
   const create = useMutation({
     mutationFn: destinations.create,
     onSuccess: () => {
@@ -60,6 +62,7 @@ export function Destinations() {
       setTestRanOk(false);
       qc.invalidateQueries({ queryKey: ["destinations"] });
     },
+    onError: onMutErr("create"),
   });
   const update = useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: DestinationDraft }) => destinations.update(id, payload),
@@ -67,6 +70,7 @@ export function Destinations() {
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["destinations"] });
     },
+    onError: onMutErr("save"),
   });
   const remove = useMutation({
     mutationFn: destinations.remove,
@@ -74,10 +78,12 @@ export function Destinations() {
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["destinations"] });
     },
+    onError: onMutErr("delete"),
   });
   const setEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => destinations.setEnabled(id, enabled),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["destinations"] }),
+    onError: onMutErr("toggle"),
   });
 
   useEffect(() => {
@@ -395,17 +401,7 @@ export function Destinations() {
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid var(--as-line)" }}>
                       <div style={{ fontSize: 13 }}>Retry on failure</div>
-                      <select
-                        className="as-select"
-                        value={draft.retry_policy}
-                        onChange={(e) => setDraft({ ...draft, retry_policy: parseInt(e.target.value, 10) })}
-                        style={{ width: 90 }}
-                      >
-                        <option value={0}>Off</option>
-                        <option value={3}>3×</option>
-                        <option value={5}>5×</option>
-                        <option value={10}>10×</option>
-                      </select>
+                      <div style={{ fontSize: 12, color: "var(--as-ink-3)" }}>Automatic · with back-off</div>
                     </div>
                   </div>
 

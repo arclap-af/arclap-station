@@ -217,6 +217,19 @@ class PhotoStore:
             pass
         return True
 
+    def delete_matching(
+        self, *, upload_filter: str | None = None, query: str | None = None
+    ) -> int:
+        """Delete every photo matching the filter/search (files + rows +
+        thumbnails). Powers the Gallery 'Delete all' so it operates on the
+        WHOLE matching set, not just the first page the operator could see."""
+        ids = [r.id for r in self.list(limit=10_000_000, upload_filter=upload_filter, query=query)]
+        deleted = 0
+        for pid in ids:
+            if self.delete(pid):
+                deleted += 1
+        return deleted
+
     def set_upload_state(self, photo_id: int, state: str) -> None:
         with self._db.tx() as conn:
             conn.execute("UPDATE photos SET upload_state=? WHERE id=?", (state, photo_id))

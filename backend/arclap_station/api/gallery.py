@@ -84,6 +84,31 @@ async def full_photo(
     return FileResponse(src)
 
 
+class BulkDeleteBody(BaseModel):
+    ids: list[int] | None = None
+    all: bool = False
+    filter: str | None = None
+    query: str | None = None
+
+
+@router.post("/bulk-delete")
+async def bulk_delete(
+    body: BulkDeleteBody,
+    _: dict[str, Any] = Depends(require_session),
+) -> dict[str, Any]:
+    """Delete many photos in ONE request. `all=true` deletes every photo
+    matching the current filter/search (not just the visible first page —
+    the old client-side loop only touched what was loaded); otherwise
+    deletes the given ids."""
+    store = get_store()
+    if body.all:
+        deleted = store.delete_matching(upload_filter=body.filter, query=body.query)
+    else:
+        deleted = sum(1 for pid in (body.ids or []) if store.delete(pid))
+    audit_emit("user", "gallery.bulk_delete", {"count": deleted, "all": body.all})
+    return {"deleted": deleted}
+
+
 class StarBody(BaseModel):
     starred: bool = True
 

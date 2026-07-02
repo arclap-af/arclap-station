@@ -96,6 +96,40 @@ export const gallery = {
     const resp = await apiJson(path, listResponseSchema);
     return resp.items.map(adaptPhoto);
   },
+  async listPage(params: {
+    filter?: "all" | "uploaded" | "pending" | "starred";
+    query?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ items: Photo[]; total: number }> {
+    const qs = new URLSearchParams();
+    if (params.filter && params.filter !== "all") qs.set("filter", params.filter);
+    if (params.query) qs.set("q", params.query);
+    qs.set("limit", String(params.limit));
+    qs.set("offset", String(params.offset));
+    const resp = await apiJson(`/gallery/list?${qs}`, listResponseSchema);
+    return { items: resp.items.map(adaptPhoto), total: resp.total };
+  },
+  async bulkDelete(payload: {
+    ids?: string[];
+    all?: boolean;
+    filter?: string;
+    query?: string;
+  }): Promise<number> {
+    const body: Record<string, unknown> = {};
+    if (payload.all) {
+      body.all = true;
+      if (payload.filter && payload.filter !== "all") body.filter = payload.filter;
+      if (payload.query) body.query = payload.query;
+    } else {
+      body.ids = (payload.ids ?? []).map((x) => Number(x));
+    }
+    const raw = (await apiJson("/gallery/bulk-delete", z.unknown(), {
+      method: "POST",
+      body,
+    })) as { deleted?: number };
+    return Number(raw?.deleted ?? 0);
+  },
   async star(id: string, starred: boolean): Promise<void> {
     await apiFetch(`/gallery/${id}/star`, { method: "POST", body: { starred } });
   },

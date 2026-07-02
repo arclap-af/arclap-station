@@ -52,6 +52,60 @@ def emit(
         conn.execute("UPDATE audit_log SET hash=? WHERE id=?", (chain, new_id))
 
 
+def _anchor_path() -> Any:
+    from arclap_station.config import get_settings  # noqa: PLC0415
+
+    return get_settings().paths.var / "audit_anchor.json"
+
+
+def _load_anchor() -> tuple[int, str | None]:
+    """Return (last_pruned_id, last_pruned_hash) or (0, None) if the log
+    has never been pruned."""
+    try:
+        d = json.loads(_anchor_path().read_text(encoding="utf-8"))
+        return int(d["id"]), (str(d["hash"]) if d.get("hash") else None)
+    except Exception:  # noqa: BLE001
+        return 0, None
+
+
+def _save_anchor(anchor_id: int, anchor_hash: str | None) -> None:
+    p = _anchor_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"id": anchor_id, "hash": anchor_hash}), encoding="utf-8")
+    tmp.replace(p)
+
+
+def prune(keep: int = 50_000, db: Database | None = None) -> int:
+    """Bound the audit log to the newest `keep` rows.
+
+    The log is a hash chain, so we can't just delete the head — the first
+    retained row's prev_hash would then point at nothing. Instead we save
+    an ANCHOR (id + hash of the last row before the retained window);
+    verify_chain() starts from that anchor so the retained window still
+    verifies as a continuous chain. Called from the nightly retention
+    sweep so a long-running station's audit_log can't grow without bound.
+    """
+    database = db or get_db()
+    with database.connect() as conn:
+        total = int(conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0])
+    if total <= keep:
+        return 0
+    with database.tx() as conn:
+        cutoff = conn.execute(
+            "SELECT id, hash FROM audit_log ORDER BY id DESC LIMIT 1 OFFSET ?",
+            (keep,),
+        ).fetchone()
+        if cutoff is None:
+            return 0
+        cutoff_id, cutoff_hash = int(cutoff[0]), cutoff[1]
+        deleted = conn.execute(
+            "DELETE FROM audit_log WHERE id <= ?", (cutoff_id,)
+        ).rowcount
+    _save_anchor(cutoff_id, cutoff_hash)
+    return deleted
+
+
 def verify_chain(db: Database | None = None, page_size: int = 5000) -> dict[str, Any]:
     """Re-hash EVERY row (paginated) and report breaks.
 
@@ -62,8 +116,10 @@ def verify_chain(db: Database | None = None, page_size: int = 5000) -> dict[str,
     """
     database = db or get_db()
     breaks: list[dict[str, Any]] = []
-    prev: str | None = None
-    last_id = 0
+    # Start from the prune anchor (if the log has been bounded) so the
+    # retained window verifies as a continuous chain instead of failing
+    # at its first row, whose prev_hash points at a pruned row.
+    last_id, prev = _load_anchor()
     checked = 0
     while True:
         with database.connect() as conn:
