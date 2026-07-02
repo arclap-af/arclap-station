@@ -75,6 +75,11 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   const { data: session, isLoading } = useQuery({
     queryKey: ["auth.session"],
     queryFn: auth.session,
+    // Re-verify periodically + on tab focus so an expired 12h session
+    // redirects to /login instead of leaving a zombie cockpit that shows
+    // stale data and silently 401s every action.
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
   useEffect(() => {
     if (!isLoading && !session?.logged_in) {
