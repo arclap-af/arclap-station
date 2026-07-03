@@ -108,6 +108,28 @@ def write_failure(err: str) -> None:
     _write(payload)
 
 
+def clear_failure() -> None:
+    """Drop the recent-failure marker so the next ``_ensure()`` runs its
+    full init ladder (1s/3s/10s) instead of fail-fast.
+
+    Does NOT mark the beacon ok — only a real ``detect()`` success does
+    that. Shared by the manual /camera/reconnect endpoint and the
+    background auto-reconnect loop so a freshly re-plugged camera gets a
+    genuine retry rather than a single instant-fail.
+    """
+    payload = _read()
+    if not any(k in payload for k in ("last_error", "last_error_at")):
+        return
+    payload.pop("last_error", None)
+    payload.pop("last_error_at", None)
+    _write(payload)
+
+
+def is_ok() -> bool:
+    """Cheap, USB-free read of the beacon's last-known camera state."""
+    return bool(_read().get("ok"))
+
+
 # ----- flap detection ----------------------------------------------------
 
 # More than FLAP_THRESHOLD recoveries inside FLAP_WINDOW_SEC = "flapping".

@@ -26,9 +26,9 @@ viewfinder.
 | Unit | Purpose | Restart | Hardening |
 |------|---------|---------|-----------|
 | `arclap-station.socket` | Holds the UDS so updates can hand-off without dropping connections. | n/a | `SocketUser=arclap`, `SocketMode=0660` |
-| `arclap-station.service` | Uvicorn + FastAPI. | `always` (3s) | strict; `Type=notify`; `WatchdogSec=30s` |
-| `arclap-uploader.service` | Worker process that drains `state.db.uploads`. | `always` (5s) | strict |
-| `arclap-watchdog.service` | Oneshot health probe. | n/a | minimal — runs as root to be able to `systemctl restart` |
+| `arclap-station.service` | Uvicorn + FastAPI. Also hosts the in-process background loops (upload-queue drain, WAL checkpoint, health self-test, heartbeat, camera keepalive, **camera auto-reconnect**, sd_notify watchdog) via the FastAPI lifespan. | `always` (3s) | strict; `Type=notify`; `WatchdogSec=30s` |
+| ~~`arclap-uploader.service`~~ | **Retired.** Uploads now drain in-process inside `arclap-station` (the queue worker runs in the lifespan), so there is no separate uploader unit to enable. | — | — |
+| `arclap-watchdog.service` | Oneshot camera-USB probe (reads the health beacon; USB-authorize resets a wedged camera). | n/a | minimal — runs as root to be able to reset USB / `systemctl restart` |
 | `arclap-watchdog.timer` | Fires `arclap-watchdog.service` every 30s. | n/a | n/a |
 
 The watchdog talks to Caddy at `https://127.0.0.1/api/health` rather than the

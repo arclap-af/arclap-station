@@ -274,6 +274,7 @@ single fault without a human. What's automatic:
 | **App hangs** (deadlock, wedged camera call, stuck I/O) | The software watchdog stops getting pings → systemd kills + restarts within **60 s** (`WatchdogSec=60` + sd_notify from the event loop) |
 | **systemd / kernel hangs** | The Pi **hardware watchdog** hard-reboots the box after 15 s (`RuntimeWatchdogSec`) |
 | **Camera USB wedges** | Recovery ladder: reconnect → `/sys` re-authorize → **USB bus power-cycle** (uhubctl, if a switchable hub is fitted) → service self-restart |
+| **Camera disconnected during an active schedule** (unplug, power blip, standby, camera/Pi restart) | A background loop **reconnects automatically** — no operator "Reconnect" needed. It polls `detect()` every 15 s while a schedule is in-window and escalates to the full re-init recovery every ~2 min, until the camera is back. Emits `camera.lost` / `camera.auto_reconnected` to the activity log. Idle when no schedule is in-window |
 | **Camera sleeps between captures** | A keepalive poll every 3 min holds the PTP session awake |
 | **state.db corrupted by power loss** | On boot, integrity is checked; if corrupt it **auto-restores from the newest nightly backup** (the corrupt file is kept aside as `state.db.corrupt-*`). At most a day of metadata is lost; photo files are never touched |
 | **Mains power lost** (UPS HAT fitted) | Below 12 % battery the station **shuts down cleanly** to avoid SD corruption |

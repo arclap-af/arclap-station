@@ -531,6 +531,26 @@ class ScheduleEngine:
     def active_count(self) -> int:
         return sum(1 for j in self._scheduler.get_jobs() if j.next_run_time is not None)
 
+    def any_active_now(self, now: datetime | None = None) -> bool:
+        """True if any enabled schedule is inside its active day+time window.
+
+        Used by the camera auto-reconnect loop: while this is True the
+        camera should be connected, so a disconnect triggers continuous
+        reconnect attempts until it's back.
+        """
+        from arclap_station.scheduler.rules import is_within_window  # noqa: PLC0415
+
+        when = now or datetime.now()
+        for s in self.list():
+            if s.enabled and is_within_window(
+                days_csv=s.days_csv,
+                from_time=s.from_time,
+                to_time=s.to_time,
+                now=when,
+            ):
+                return True
+        return False
+
     # ----- internal -----------------------------------------------------
 
     def _sync_job(self, sched_id: str, interval_min: int, enabled: bool) -> None:

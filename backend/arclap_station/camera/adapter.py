@@ -778,3 +778,25 @@ def set_adapter(adapter: CameraAdapter | None) -> None:
     global _adapter
     with _adapter_lock:
         _adapter = adapter
+
+
+def reconnect_camera() -> CameraInfo:
+    """Force a fresh camera connection and return the resulting state.
+
+    Drops the held PTP session, clears the beacon's recent-failure marker
+    so the next ``_ensure()`` runs its full init ladder, then re-detects.
+    Shared by the manual ``/camera/reconnect`` endpoint and the background
+    auto-reconnect loop so both take the identical, proven recovery path.
+    """
+    adapter = get_adapter()
+    try:
+        adapter.close()
+    except Exception:  # noqa: BLE001
+        log.debug("reconnect_camera: close failed", exc_info=True)
+    try:
+        from arclap_station.camera import health as _health  # noqa: PLC0415
+
+        _health.clear_failure()
+    except Exception:  # noqa: BLE001
+        log.debug("reconnect_camera: clear_failure failed", exc_info=True)
+    return adapter.detect()

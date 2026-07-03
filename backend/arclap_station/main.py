@@ -169,6 +169,62 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     keepalive_task = asyncio.create_task(_keepalive_loop())
 
+    # Camera auto-reconnect — while any schedule is inside its active
+    # window the camera MUST be connected, so a disconnect (unplug, power
+    # blip, standby, Pi or camera restart) recovers on its own without an
+    # operator pressing Reconnect. When up, re-verify on a slow cadence;
+    # when down, poll fast with a cheap detect() (which succeeds the
+    # instant the camera is re-plugged) and escalate to the full
+    # close+clear+detect recovery every ~2 min to cure a wedged handle.
+    # Idle (no active schedule) stays out of the way. Complements the
+    # root systemd camera-watchdog (USB reset) via the shared beacon.
+    async def _camera_reconnect_loop() -> None:
+        from arclap_station.audit import emit as _audit  # noqa: PLC0415
+        from arclap_station.camera.adapter import (  # noqa: PLC0415
+            get_adapter,
+            reconnect_camera,
+        )
+        from arclap_station.scheduler.engine import get_engine  # noqa: PLC0415
+
+        verify_sec = 45.0  # active + camera up: re-verify cadence
+        retry_sec = 15.0  # active + camera down: reconnect cadence
+        idle_sec = 60.0  # no active schedule: stay out of the way
+        heavy_every = 8  # escalate to full recovery every Nth failed poll
+
+        await asyncio.sleep(90)  # let startup settle (first detect, queue drain)
+        log.info("camera auto-reconnect loop active (reconnects while a schedule is in-window)")
+        fail_count = 0
+        while True:
+            delay = idle_sec
+            try:
+                active = await asyncio.to_thread(get_engine().any_active_now)
+                if active:
+                    heavy = fail_count > 0 and fail_count % heavy_every == 0
+                    info = await asyncio.to_thread(
+                        reconnect_camera if heavy else get_adapter().detect
+                    )
+                    if info.detected:
+                        if fail_count > 0:
+                            _audit("system", "camera.auto_reconnected", {"model": info.model})
+                            log.info("camera auto-reconnected (model=%s)", info.model)
+                        fail_count = 0
+                        delay = verify_sec
+                    else:
+                        if fail_count == 0:
+                            _audit("system", "camera.lost", {"context": "active_schedule"})
+                            log.warning(
+                                "camera down during active schedule — auto-retrying until reconnected"
+                            )
+                        fail_count += 1
+                        delay = retry_sec
+                else:
+                    fail_count = 0  # window closed — reset the escalation ladder
+            except Exception as exc:  # noqa: BLE001
+                log.debug("camera reconnect loop iteration failed: %s", exc)
+            await asyncio.sleep(delay)
+
+    reconnect_task = asyncio.create_task(_camera_reconnect_loop())
+
     # systemd software watchdog — pet it from inside the event loop so a
     # HANG (not just a crash) gets the service killed + restarted. No-op
     # when not running under systemd / WatchdogSec unset (dev, tests).
@@ -192,7 +248,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        _bg_tasks = (wal_task, health_task, heartbeat_task, keepalive_task, watchdog_task)
+        _bg_tasks = (
+            wal_task,
+            health_task,
+            heartbeat_task,
+            keepalive_task,
+            reconnect_task,
+            watchdog_task,
+        )
         for _t in _bg_tasks:
             _t.cancel()
         for _t in _bg_tasks:

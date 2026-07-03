@@ -11,11 +11,14 @@ runtime. The log files under `/var/log/arclap/` are rotated copies for forensics
 # Everything Arclap.
 sudo journalctl -fu 'arclap-*'
 
-# Single service.
+# Single service. (Uploads, health, keepalive + camera auto-reconnect all
+# run inside arclap-station now — there is no separate arclap-uploader unit.)
 sudo journalctl -fu arclap-station
-sudo journalctl -fu arclap-uploader
-sudo journalctl -fu arclap-watchdog
+sudo journalctl -fu arclap-watchdog   # camera-USB probe timer
 sudo journalctl -fu caddy
+
+# Camera auto-reconnect activity specifically:
+sudo journalctl -u arclap-station | grep -iE "auto-reconnect|camera down|camera.lost"
 sudo journalctl -fu avahi-daemon
 ```
 

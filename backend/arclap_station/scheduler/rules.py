@@ -65,6 +65,39 @@ def should_skip(
     return SkipDecision(False)
 
 
+def is_within_window(
+    *,
+    days_csv: str,
+    from_time: str,
+    to_time: str,
+    now: datetime,
+) -> bool:
+    """True if ``now`` falls inside this schedule's active day + time window.
+
+    Unlike :func:`should_skip`, this ignores the disk and destination
+    gates — it answers only "should this schedule be capturing right
+    now", which is what the camera auto-reconnect loop uses to decide
+    whether the camera must be connected. (A full disk or an offline
+    destination stops a *capture*, but the camera should still be up and
+    ready during the window.)
+    """
+    label = _DOW_LABELS[now.weekday()]
+    days = {d.strip().lower() for d in days_csv.split(",") if d.strip()}
+    if days and label not in days:
+        return False
+    if from_time and to_time:
+        try:
+            f_h, f_m = (int(x) for x in from_time.split(":"))
+            t_h, t_m = (int(x) for x in to_time.split(":"))
+            cur = now.hour * 60 + now.minute
+            f = f_h * 60 + f_m
+            t = t_h * 60 + t_m
+            return f <= cur <= t if f <= t else (cur >= f or cur <= t)
+        except ValueError:
+            return False
+    return True
+
+
 def list_destination_ids(dest_filter: str | None) -> list[str]:
     manager = get_manager()
     available = [d for d in manager.list() if d.enabled]

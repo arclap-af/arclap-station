@@ -1,5 +1,71 @@
 # Arclap Station — Changelog
 
+## v0.9.11 — 2026-07-03
+
+Latest cockpit + camera work. Verified live on `arclap-st-90107cb4`
+(192.168.10.28); backend 157 tests + frontend 31 tests green; CI green.
+
+### Camera
+- **Automatic reconnect while a schedule is active.** A background loop
+  (`main.py:_camera_reconnect_loop`) verifies the camera on a slow
+  cadence and, the instant it's found disconnected during an active
+  schedule window (unplug, power blip, standby, Pi/camera restart),
+  retries continuously until it reconnects — no operator "Reconnect"
+  needed. Cheap `detect()` poll every 15 s, escalating to the full
+  close → clear-beacon → re-init recovery every ~2 min; idle when no
+  schedule is in-window. New audit events `camera.lost` /
+  `camera.auto_reconnected`. The manual `/api/camera/reconnect` endpoint
+  now shares the same `reconnect_camera()` path.
+
+### Schedule
+- **Custom capture interval** — a free-entry field (any value 1–1440 min)
+  beside the presets, committed on blur/Enter so multi-digit typing isn't
+  clamped mid-keystroke.
+
+### Cockpit (frontend)
+- **i18n** — English / German / French, dependency-free (~1 KB),
+  switchable in Settings › General, browser-language detected, `<html
+  lang>` synced.
+- **Load speed** — route code-splitting; the ~290 KB xterm terminal is no
+  longer on first paint (initial JS roughly halved).
+- **Resilience** — per-route error boundary, global "connection lost"
+  banner, and reusable loading/error/retry states so a flaky LAN never
+  leaves a silently-blank panel.
+- **Runtime validation** — Zod drift-warnings at the API boundary so a
+  backend field rename is visible instead of silently becoming "—".
+- Compact tablet/phone nav; per-route browser tab titles.
+
+### Tooling
+- CI is green end-to-end again (ruff, mypy, pytest, eslint, tsc, vitest,
+  build, shellcheck). Removed a fictional Playwright job.
+
+## v0.9.0 → v0.9.10 — 2026-05 to 2026-07 (summary)
+
+The 0.9 line hardened the station from "works" to "survives two years
+unattended". Condensed from the commit history (see `git log` for the
+per-release detail):
+
+- **v0.9.10** — session-expiry redirect (no zombie cockpit that 401s
+  every action); Phase-4 fleet spec.
+- **v0.9.9** — resilience hardening across alerts, backups and the
+  camera watchdog.
+- **v0.9.8** — FTPS destination selection no longer silently falls back
+  to plaintext FTP.
+- **v0.9.7** — gallery pagination for thousands of photos; bounded +
+  anchored audit chain; honest UI (no fake-green states).
+- **v0.9.6** — honest uploaders (real per-destination state) + endurance
+  / recovery fixes.
+- **v0.9.5** — data-loss, security and active-bug fixes from a full audit
+  (emergency retention never deletes un-uploaded photos; secret
+  redaction; upload retry-stall fix).
+- **v0.9.4** — camera watchdog re-enumerates on the "detects but can't
+  capture" wedge.
+- **v0.9.3** — capture-aware health self-test + capture-failure recovery
+  ladder.
+- **v0.9.0–v0.9.2** — hang-detection watchdogs, SD-card longevity,
+  corrupt-boot self-heal, health self-test + alerting + heartbeat, fleet
+  station-card + GitHub update-check.
+
 ## v0.8.0 — 2026-05-19 (overnight: every ★ landed)
 
 A single overnight cut that ships every item I marked ★ across the

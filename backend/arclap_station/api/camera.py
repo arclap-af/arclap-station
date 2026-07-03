@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from arclap_station.api.deps import require_session
 from arclap_station.audit import emit as audit_emit
-from arclap_station.camera.adapter import get_adapter
+from arclap_station.camera.adapter import get_adapter, reconnect_camera
 from arclap_station.camera.stream import serve_preview_ws
 from arclap_station.config import get_settings
 from arclap_station.photos.exif import extract_exif
@@ -305,33 +305,14 @@ async def reconnect(_: dict[str, Any] = Depends(require_session)) -> dict[str, A
     who's just plugged the camera in would get a single instant-fail attempt
     because the beacon still records the unplugged state.
     """
+    audit_emit("user", "camera.reconnect", {})
+    # Shared close + clear-beacon-failure + detect path (also used by the
+    # background auto-reconnect loop). Never 502 on a beacon hiccup — only
+    # a genuine close() failure should surface as an error.
     try:
-        get_adapter().close()
+        info = reconnect_camera()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    # Wipe the beacon's recent-failure marker so the next ensure() does the
-    # full retry ladder. We DON'T mark it ok — detect() will do that if it
-    # actually succeeds. Best-effort: never fail the request on a beacon error.
-    try:
-        import json as _json  # noqa: PLC0415
-
-        from arclap_station.camera import health as _ch  # noqa: PLC0415
-
-        path = _ch._path()  # noqa: SLF001
-        try:
-            payload = _json.loads(path.read_text())
-        except (OSError, _json.JSONDecodeError):
-            payload = {}
-        for k in ("last_error_at", "last_error"):
-            payload.pop(k, None)
-        path.write_text(_json.dumps(payload, indent=2))
-    except Exception:  # noqa: BLE001
-        pass
-
-    audit_emit("user", "camera.reconnect", {})
-    # Trigger an immediate detect so the cockpit gets fresh state.
-    info = get_adapter().detect()
     return {"ok": info.detected, "model": info.model, "port": info.port}
 
 

@@ -12,13 +12,14 @@ It's Python/FastAPI + Vite/React + TypeScript, designed to be flashed once and f
 
 ## 1. What it is
 
-A self-contained device controller you flash onto an SD card and put on a shelf. It survives 2-year unattended construction-site deployments and is built to self-heal from any single fault without a human. Current release: **v0.9.2**.
+A self-contained device controller you flash onto an SD card and put on a shelf. It survives 2-year unattended construction-site deployments and is built to self-heal from any single fault without a human. Current release: **v0.9.11**.
 
 **Capture + cockpit**
 - A **10-step setup wizard** (Wi-Fi, time, login, camera, schedule, destinations, pairing, acceptance).
+- **Localised cockpit** — English, German (Deutsch) and French (Français), switchable from Settings › General; detects the browser language on first load.
 - A **still-image camera page**: a big Capture button plus a preview of the last shot with its EXIF — no live MJPEG (deliberately dropped; the station is a capture device, not a viewfinder).
 - The camera page uses **real gphoto2 choices** for ISO / shutter / aperture chips — no hardcoded lists.
-- **APScheduler** for time-lapse and interval captures (1 min – 24 h), with active-hours, day-of-week, per-schedule destination routing, and a "keep local copy" toggle — persisted across reboots.
+- **APScheduler** for time-lapse and interval captures — presets plus a **custom interval** field (any value 1–1440 min), with active-hours, day-of-week, per-schedule destination routing, and a "keep local copy" toggle — persisted across reboots.
 - **EXIF auto-rotate + watermark on by default** on every capture (serial · site · UTC timestamp) for legal/insurance proof.
 - **Perceptual-hash (dHash) deduplication** drops near-identical frames in a 10-min window — opt-in via `dedup_threshold`.
 - **Daily pre-rendered timelapse MP4s** rendered by ffmpeg at 03:30 — the strategic retention asset.
@@ -26,6 +27,7 @@ A self-contained device controller you flash onto an SD card and put on a shelf.
 **Camera reliability (A–K)**
 - USB autosuspend off for 8 camera vendors (Canon / Nikon / Sony / Fuji / Olympus / Panasonic / Pentax / Leica) via udev.
 - Auto-power-off disabled on the body via PTP after init; a **3-min keepalive poll** holds the PTP session awake between scheduled captures.
+- **Automatic reconnect while a schedule is active**: a background loop verifies the camera on a slow cadence and, the moment it's found disconnected (unplug, power blip, standby, Pi/camera restart), retries continuously until it's back — no operator "Reconnect" click needed. It escalates to the full close → re-init recovery every ~2 min and cooperates with the systemd USB-watchdog via the shared health beacon. Idle (no schedule in-window) it stays out of the way.
 - `char-usb_device` cgroup grant (the fix for the silent `-7 I/O problem` under systemd hardening).
 - An `RLock` serialises all libgphoto2 access so concurrent cockpit requests can't race `Camera().init()`.
 - Init retry with 1s / 3s / 10s backoff; pre-capture wake probe; capture target = SDRAM (never CF/SD card).
@@ -110,7 +112,7 @@ Pin a specific release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arclap-af/arclap-station/main/install.sh \
-  | sudo ARCLAP_VERSION=v0.9.2 bash
+  | sudo ARCLAP_VERSION=v0.9.11 bash
 ```
 
 Alternative (offline / from a cloned repo):
