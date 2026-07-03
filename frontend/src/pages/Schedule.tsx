@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../components/Button";
@@ -37,6 +37,16 @@ export function SchedulePage() {
   // nothing visible happened. Operators reasonably concluded the
   // schedule editor was broken and reverted to "delete + recreate".
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Free-text buffer for the custom-interval field so the operator can
+  // type multi-digit values (and briefly clear the box) without the
+  // draft clamping each keystroke back to a valid number. Committed to
+  // the draft on blur; kept in sync when the interval changes elsewhere
+  // (preset chip, opening a schedule).
+  const [intervalStr, setIntervalStr] = useState("15");
+  const draftInterval = draft?.interval_minutes;
+  useEffect(() => {
+    if (draftInterval != null) setIntervalStr(String(draftInterval));
+  }, [draftInterval]);
   const { data: items = [] } = useQuery({ queryKey: ["schedule"], queryFn: schedule.list });
   // Real list of configured destinations — feeds the "Send to" dropdown
   // so the user can route this schedule to a specific destination
@@ -245,8 +255,8 @@ export function SchedulePage() {
                   <FormField label="Name">
                     <TextInput value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
                   </FormField>
-                  <FormField label="Interval">
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <FormField label="Interval" hint="Pick a preset or type any value (1–1440 min).">
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                       {INTERVALS.map((m) => {
                         const active = draft.interval_minutes === m;
                         return (
@@ -270,6 +280,55 @@ export function SchedulePage() {
                           </button>
                         );
                       })}
+                      {/* Custom interval — the backend takes any integer 1–1440,
+                          so an operator isn't boxed into the presets. Highlighted
+                          when the current value isn't one of the presets. */}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "3px 8px 3px 10px",
+                          borderRadius: 8,
+                          border: `1px solid ${INTERVALS.includes(draft.interval_minutes) ? "var(--as-line)" : "var(--as-accent)"}`,
+                          background: "var(--as-surface)",
+                        }}
+                      >
+                        <span style={{ fontSize: 11.5, color: "var(--as-ink-3)" }}>Custom</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1440}
+                          step={1}
+                          value={intervalStr}
+                          aria-label="Custom interval in minutes"
+                          // Type freely; clamp + commit to the draft on blur
+                          // (or Enter). Empty/invalid falls back to 1.
+                          onChange={(e) => setIntervalStr(e.target.value)}
+                          onBlur={() => {
+                            const n = Math.round(Number(intervalStr));
+                            const clamped = Number.isFinite(n) ? Math.max(1, Math.min(1440, n)) : 1;
+                            setIntervalStr(String(clamped));
+                            setDraft({ ...draft, interval_minutes: clamped });
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                          }}
+                          className="mono"
+                          style={{
+                            width: 58,
+                            height: 30,
+                            textAlign: "center",
+                            fontSize: 12.5,
+                            borderRadius: 6,
+                            border: "1px solid var(--as-line)",
+                            background: "var(--as-bg-2)",
+                            color: "var(--as-ink)",
+                            fontFamily: "var(--as-mono)",
+                          }}
+                        />
+                        <span style={{ fontSize: 11.5, color: "var(--as-ink-3)" }}>min</span>
+                      </div>
                     </div>
                   </FormField>
                   <FormField label="Active hours">

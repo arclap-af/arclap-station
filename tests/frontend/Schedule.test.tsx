@@ -67,6 +67,19 @@ describe("Schedule", () => {
     expect(h.create).toHaveBeenCalledOnce();
   });
 
+  it("lets the operator set a custom (non-preset) interval", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SchedulePage />);
+    await screen.findByText("Daytime capture");
+    await user.click(screen.getAllByRole("button", { name: /New schedule/i })[0]);
+    const custom = screen.getByLabelText("Custom interval in minutes");
+    await user.clear(custom);
+    await user.type(custom, "20");
+    await user.tab(); // blur commits the value to the draft
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(h.create).toHaveBeenCalledWith(expect.objectContaining({ interval_minutes: 20 }));
+  });
+
   it("pauses a schedule via its row toggle", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SchedulePage />);
