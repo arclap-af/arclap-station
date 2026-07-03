@@ -1023,6 +1023,75 @@ button:not(:disabled),
 }
 .as-empty-cta { margin-top: 6px; }
 
+/* ───── Async loading / error blocks ─────
+   Rendered by <Async>/<LoadingState>/<ErrorState>. Same visual family as
+   .as-empty so loading, error and empty surfaces read consistently. */
+.as-async {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 44px 24px;
+  gap: 12px;
+  color: var(--as-ink-3);
+}
+.as-async-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--as-bg-2);
+  border: 1px solid var(--as-line);
+}
+.as-async-icon.bad { color: var(--as-bad); border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+.as-async-title { color: var(--as-ink); font-size: 14.5px; font-weight: 600; }
+.as-async-msg { font-size: 12px; max-width: 420px; line-height: 1.5; word-break: break-word; }
+.as-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid var(--as-line);
+  border-top-color: var(--as-accent);
+  animation: as-spin 0.7s linear infinite;
+}
+@keyframes as-spin { to { transform: rotate(360deg); } }
+
+/* ───── Offline banner ─────
+   Fixed pill shown when the cockpit can't reach the station API. */
+.as-offline-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--as-bad);
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  animation: as-toast 0.25s ease-out;
+}
+.as-offline-retry {
+  border: none;
+  background: var(--as-bad);
+  color: #fff;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
 /* ───── Skeleton loaders ─────
    Use anywhere data is loading so the page doesn't flash empty content.
    Drop .as-skel on a block-level element with explicit width/height. */

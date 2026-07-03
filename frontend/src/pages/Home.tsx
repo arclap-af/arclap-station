@@ -5,13 +5,19 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "../components/Button";
 import { Pill } from "../components/Pill";
 import { Icon, I } from "../components/icons";
+import { ErrorState, LoadingState } from "../components/states";
 import { home as homeApi, adaptTelemetry, type ActivityEvent, type Telemetry } from "../lib/bridge/home";
 import { useWebSocket } from "../lib/ws";
 
 export function Home() {
   const [live, setLive] = useState<Telemetry | null>(null);
 
-  const { data: telemetry, refetch } = useQuery({
+  const {
+    data: telemetry,
+    refetch,
+    isError: telemetryError,
+    error: telemetryErr,
+  } = useQuery({
     queryKey: ["home.telemetry"],
     queryFn: homeApi.telemetry,
     refetchInterval: 30_000,
@@ -37,11 +43,22 @@ export function Home() {
   const t = live ?? telemetry;
 
   if (!t) {
+    // No live WS frame yet and no polled data — distinguish "still
+    // loading" from "the fetch failed" so a LAN drop shows a retry
+    // instead of a permanent "Reading telemetry…" that never resolves.
     return (
       <div className="as-scroll">
         <div className="as-page">
-          <div className="as-h1">Station overview</div>
-          <div className="as-h1-sub">Reading telemetry…</div>
+          <h1 className="as-h1">Station overview</h1>
+          {telemetryError ? (
+            <ErrorState
+              error={telemetryErr}
+              onRetry={() => refetch()}
+              label="Couldn't reach the station"
+            />
+          ) : (
+            <LoadingState label="Reading telemetry…" />
+          )}
         </div>
       </div>
     );

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import {
   BrowserRouter,
   Navigate,
@@ -9,6 +9,9 @@ import {
 } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { LoadingState } from "./components/states";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { Sidebar } from "./components/Sidebar";
 import { ToastProvider } from "./components/ToastQueue";
 import { Topbar } from "./components/Topbar";
@@ -19,33 +22,42 @@ import { setup } from "./lib/bridge/setup";
 import { home as homeApi } from "./lib/bridge/home";
 
 import { Login } from "./pages/Login";
-import { Home } from "./pages/Home";
-import { SetupWizard } from "./pages/Setup";
-import { CameraPage } from "./pages/Camera";
-import { CameraProperties } from "./pages/Camera/Properties";
-import { Gallery } from "./pages/Gallery";
-import { SchedulePage } from "./pages/Schedule";
-import { Destinations } from "./pages/Destinations";
-import { Terminal } from "./pages/Terminal";
-import { Settings } from "./pages/Settings";
+
+// Route components are code-split so the initial bundle stays lean — most
+// notably the Terminal page pulls in xterm (~290 KB), which no longer
+// ships on first paint for operators who never open a shell. Named
+// exports are unwrapped to the default shape React.lazy expects.
+const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
+const SetupWizard = lazy(() => import("./pages/Setup").then((m) => ({ default: m.SetupWizard })));
+const CameraPage = lazy(() => import("./pages/Camera").then((m) => ({ default: m.CameraPage })));
+const CameraProperties = lazy(() =>
+  import("./pages/Camera/Properties").then((m) => ({ default: m.CameraProperties })),
+);
+const Gallery = lazy(() => import("./pages/Gallery").then((m) => ({ default: m.Gallery })));
+const SchedulePage = lazy(() => import("./pages/Schedule").then((m) => ({ default: m.SchedulePage })));
+const Destinations = lazy(() => import("./pages/Destinations").then((m) => ({ default: m.Destinations })));
+const Terminal = lazy(() => import("./pages/Terminal").then((m) => ({ default: m.Terminal })));
+const Settings = lazy(() => import("./pages/Settings").then((m) => ({ default: m.Settings })));
 
 export function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <Routes>
-          <Route path="/" element={<RootGate />} />
-          <Route path="/setup/*" element={<SetupWizard />} />
-          <Route path="/login" element={<Login />} />
-          <Route
-            path="/*"
-            element={
-              <RequireAuth>
-                <Shell />
-              </RequireAuth>
-            }
-          />
-        </Routes>
+        <Suspense fallback={<LoadingScreen label="Loading…" />}>
+          <Routes>
+            <Route path="/" element={<RootGate />} />
+            <Route path="/setup/*" element={<SetupWizard />} />
+            <Route path="/login" element={<Login />} />
+            <Route
+              path="/*"
+              element={
+                <RequireAuth>
+                  <Shell />
+                </RequireAuth>
+              }
+            />
+          </Routes>
+        </Suspense>
       </ToastProvider>
     </BrowserRouter>
   );
@@ -95,7 +107,12 @@ function Shell() {
   // Wire global keyboard shortcuts inside the authenticated shell only —
   // so Login + Setup pages don't intercept keys.
   useGlobalHotkeys();
-  const { data: telemetry } = useQuery({
+  const location = useLocation();
+  const {
+    data: telemetry,
+    isError: telemetryDown,
+    refetch: refetchTelemetry,
+  } = useQuery({
     queryKey: ["home.telemetry"],
     queryFn: homeApi.telemetry,
     refetchInterval: 15_000,
@@ -107,6 +124,7 @@ function Shell() {
   return (
     <>
       <URLBar hostname={hostname} ip={ip} status={status} />
+      <OfflineBanner show={telemetryDown} onRetry={() => refetchTelemetry()} />
       <div className="as-shell">
         <Sidebar hostname={hostname} ip={ip} firmware={firmware} />
         <div className="as-main">
@@ -117,19 +135,27 @@ function Shell() {
               </div>
             }
           />
-          <Routes>
-            <Route index element={<Navigate to="/home" replace />} />
-            <Route path="/home" element={<Home />} />
-            <Route path="/camera" element={<CameraPage />} />
-            <Route path="/camera/properties" element={<CameraProperties />} />
-            <Route path="/gallery" element={<Gallery />} />
-            <Route path="/schedule" element={<SchedulePage />} />
-            <Route path="/destinations" element={<Destinations />} />
-            <Route path="/terminal" element={<Terminal />} />
-            <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
-            <Route path="/settings/:tab" element={<Settings />} />
-            <Route path="*" element={<Navigate to="/home" replace />} />
-          </Routes>
+          {/* Per-route boundary: a crash in one page shows an inline retry
+              card while the sidebar/topbar stay usable. Keyed on the path
+              so navigating away clears a stuck error. Suspense drives the
+              code-split page chunks. */}
+          <ErrorBoundary inline key={location.pathname}>
+            <Suspense fallback={<LoadingState label="Loading view…" />}>
+              <Routes>
+                <Route index element={<Navigate to="/home" replace />} />
+                <Route path="/home" element={<Home />} />
+                <Route path="/camera" element={<CameraPage />} />
+                <Route path="/camera/properties" element={<CameraProperties />} />
+                <Route path="/gallery" element={<Gallery />} />
+                <Route path="/schedule" element={<SchedulePage />} />
+                <Route path="/destinations" element={<Destinations />} />
+                <Route path="/terminal" element={<Terminal />} />
+                <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
+                <Route path="/settings/:tab" element={<Settings />} />
+                <Route path="*" element={<Navigate to="/home" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </div>
     </>

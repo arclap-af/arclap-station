@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "../../components/Button";
 import { EmptyState } from "../../components/EmptyState";
+import { ErrorState } from "../../components/states";
 import { FormField, TextInput } from "../../components/FormField";
 import { Pill, StatusDot } from "../../components/Pill";
 import { Toggle } from "../../components/Toggle";
@@ -39,7 +40,12 @@ export function Destinations() {
   const [testResult, setTestResult] = useState<DestinationTest | null>(null);
   const [testRanOk, setTestRanOk] = useState(false);
 
-  const { data: items = [] } = useQuery({ queryKey: ["destinations"], queryFn: destinations.list, refetchInterval: 8000 });
+  const {
+    data: items = [],
+    isError: listError,
+    error: listErr,
+    refetch: refetchList,
+  } = useQuery({ queryKey: ["destinations"], queryFn: destinations.list, refetchInterval: 8000 });
 
   const test = useMutation({
     mutationFn: destinations.test,
@@ -290,7 +296,16 @@ export function Destinations() {
                 </div>
               </div>
             ))}
-            {items.length === 0 && !pickerOpen && (
+            {items.length === 0 && listError && !pickerOpen && (
+              <div className="as-card" style={{ padding: 0 }}>
+                <ErrorState
+                  error={listErr}
+                  onRetry={() => refetchList()}
+                  label="Couldn't load destinations"
+                />
+              </div>
+            )}
+            {items.length === 0 && !listError && !pickerOpen && (
               <div className="as-card" style={{ padding: 0 }}>
                 <EmptyState
                   icon={I.upload}
