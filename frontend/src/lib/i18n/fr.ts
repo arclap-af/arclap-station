@@ -1,0 +1,50 @@
+// French (Français) — formal register, technical terms for a station cockpit.
+export const fr: Record<string, string> = {
+  "nav.home": "Accueil",
+  "nav.camera": "Caméra",
+  "nav.gallery": "Galerie",
+  "nav.schedule": "Planning",
+  "nav.destinations": "Destinations",
+  "nav.terminal": "Terminal",
+  "nav.settings": "Paramètres",
+
+  "common.save": "Enregistrer",
+  "common.saving": "Enregistrement…",
+  "common.cancel": "Annuler",
+  "common.delete": "Supprimer",
+  "common.retry": "Réessayer",
+  "common.refresh": "Actualiser",
+  "common.add": "Ajouter",
+  "common.close": "Fermer",
+  "common.back": "Retour",
+  "common.loading": "Chargement…",
+
+  "conn.lost": "Connexion à la station perdue — nouvelle tentative…",
+  "conn.retryNow": "Réessayer maintenant",
+
+  "status.online": "En ligne",
+  "status.offline": "Hors ligne",
+  "status.connecting": "Connexion…",
+  "status.active": "Actif",
+  "status.paused": "En pause",
+  "status.warning": "Avertissement",
+
+  "home.title": "Vue d'ensemble de la station",
+  "home.status": "État",
+  "home.capturesToday": "Captures du jour",
+  "home.queue": "File d'attente",
+  "home.storage": "Stockage",
+  "home.cpu": "Processeur",
+  "home.memory": "Mémoire",
+  "home.network": "Réseau",
+  "home.ups": "Onduleur",
+  "home.recentActivity": "Activité récente",
+  "home.polled": "Interrogé",
+
+  "login.title": "Saisir le code PIN",
+  "login.subtitle": "Déverrouiller le cockpit de la station",
+  "login.unlock": "Déverrouiller",
+  "login.wrongPin": "Code PIN incorrect",
+
+  "settings.language": "Langue",
+};

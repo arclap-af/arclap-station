@@ -1,0 +1,50 @@
+// German (Deutsch) — formal register, technical terms for a station cockpit.
+export const de: Record<string, string> = {
+  "nav.home": "Start",
+  "nav.camera": "Kamera",
+  "nav.gallery": "Galerie",
+  "nav.schedule": "Zeitplan",
+  "nav.destinations": "Ziele",
+  "nav.terminal": "Terminal",
+  "nav.settings": "Einstellungen",
+
+  "common.save": "Speichern",
+  "common.saving": "Wird gespeichert…",
+  "common.cancel": "Abbrechen",
+  "common.delete": "Löschen",
+  "common.retry": "Erneut versuchen",
+  "common.refresh": "Aktualisieren",
+  "common.add": "Hinzufügen",
+  "common.close": "Schließen",
+  "common.back": "Zurück",
+  "common.loading": "Wird geladen…",
+
+  "conn.lost": "Verbindung zur Station verloren – wird erneut versucht…",
+  "conn.retryNow": "Jetzt erneut versuchen",
+
+  "status.online": "Online",
+  "status.offline": "Offline",
+  "status.connecting": "Verbindung wird hergestellt",
+  "status.active": "Aktiv",
+  "status.paused": "Pausiert",
+  "status.warning": "Warnung",
+
+  "home.title": "Stationsübersicht",
+  "home.status": "Status",
+  "home.capturesToday": "Aufnahmen heute",
+  "home.queue": "Warteschlange",
+  "home.storage": "Speicher",
+  "home.cpu": "CPU",
+  "home.memory": "Arbeitsspeicher",
+  "home.network": "Netzwerk",
+  "home.ups": "USV",
+  "home.recentActivity": "Letzte Aktivität",
+  "home.polled": "Abgefragt",
+
+  "login.title": "PIN eingeben",
+  "login.subtitle": "Stations-Cockpit entsperren",
+  "login.unlock": "Entsperren",
+  "login.wrongPin": "Falsche PIN",
+
+  "settings.language": "Sprache",
+};

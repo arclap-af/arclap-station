@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { I18nProvider } from "./lib/i18n";
 import "./styles/base.css";
 
 const queryClient = new QueryClient({
@@ -25,9 +26,11 @@ if (!rootEl) {
 createRoot(rootEl).render(
   <StrictMode>
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
+      <I18nProvider>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </I18nProvider>
     </ErrorBoundary>
   </StrictMode>,
 );

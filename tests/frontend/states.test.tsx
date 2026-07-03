@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import { Async, ErrorState, LoadingState } from "../../frontend/src/components/states";
 import { OfflineBanner } from "../../frontend/src/components/OfflineBanner";
+import { I18nProvider } from "../../frontend/src/lib/i18n";
 
 describe("resilience states", () => {
   it("LoadingState shows its label", () => {
@@ -49,9 +50,17 @@ describe("resilience states", () => {
   });
 
   it("OfflineBanner is hidden until show is true", () => {
-    const { rerender } = render(<OfflineBanner show={false} />);
+    const { rerender } = render(
+      <I18nProvider>
+        <OfflineBanner show={false} />
+      </I18nProvider>,
+    );
     expect(screen.queryByText(/Connection to the station lost/i)).not.toBeInTheDocument();
-    rerender(<OfflineBanner show />);
+    rerender(
+      <I18nProvider>
+        <OfflineBanner show />
+      </I18nProvider>,
+    );
     expect(screen.getByText(/Connection to the station lost/i)).toBeInTheDocument();
   });
 });

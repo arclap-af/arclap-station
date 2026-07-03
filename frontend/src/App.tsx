@@ -18,6 +18,7 @@ import { Topbar } from "./components/Topbar";
 import { URLBar } from "./components/URLBar";
 import { auth } from "./lib/bridge/auth";
 import { useGlobalHotkeys } from "./lib/hotkeys";
+import { useI18n } from "./lib/i18n";
 import { setup } from "./lib/bridge/setup";
 import { home as homeApi } from "./lib/bridge/home";
 
@@ -103,29 +104,31 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-const PAGE_TITLES: Record<string, string> = {
-  home: "Home",
-  camera: "Camera",
-  gallery: "Gallery",
-  schedule: "Schedule",
-  destinations: "Destinations",
-  terminal: "Terminal",
-  settings: "Settings",
-};
+const NAV_SEGMENTS = new Set([
+  "home",
+  "camera",
+  "gallery",
+  "schedule",
+  "destinations",
+  "terminal",
+  "settings",
+]);
 
 function Shell() {
   // Wire global keyboard shortcuts inside the authenticated shell only —
   // so Login + Setup pages don't intercept keys.
   useGlobalHotkeys();
   const location = useLocation();
+  const { t } = useI18n();
 
   // Reflect the current page in the browser tab so operators juggling
   // several station tabs (or scanning history) can tell them apart.
+  // Localised — re-runs when the language switches (t is memoised per locale).
   useEffect(() => {
     const seg = location.pathname.split("/")[1] ?? "";
-    const name = PAGE_TITLES[seg];
+    const name = NAV_SEGMENTS.has(seg) ? t(`nav.${seg}`) : "";
     document.title = name ? `${name} · Arclap Station` : "Arclap Station";
-  }, [location.pathname]);
+  }, [location.pathname, t]);
   const {
     data: telemetry,
     isError: telemetryDown,

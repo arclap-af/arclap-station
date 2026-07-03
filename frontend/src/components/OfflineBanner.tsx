@@ -1,4 +1,5 @@
 import { Icon, I } from "./icons";
+import { useI18n } from "../lib/i18n";
 
 /**
  * Sticky banner shown when the cockpit can't reach the station API.
@@ -10,14 +11,15 @@ import { Icon, I } from "./icons";
  * on the next successful poll.
  */
 export function OfflineBanner({ show, onRetry }: { show: boolean; onRetry?: () => void }) {
+  const { t } = useI18n();
   if (!show) return null;
   return (
     <div className="as-offline-banner" role="status" aria-live="polite">
       <Icon d={I.zap} size={14} />
-      <span>Connection to the station lost — retrying…</span>
+      <span>{t("conn.lost")}</span>
       {onRetry && (
         <button className="as-offline-retry" onClick={onRetry}>
-          Retry now
+          {t("conn.retryNow")}
         </button>
       )}
     </div>

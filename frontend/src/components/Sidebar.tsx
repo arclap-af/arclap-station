@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { Icon, I } from "./icons";
+import { useI18n } from "../lib/i18n";
 
 interface SidebarProps {
   hostname: string;
@@ -9,21 +10,22 @@ interface SidebarProps {
 
 interface NavItem {
   to: string;
-  label: string;
+  labelKey: string;
   iconPath: string;
 }
 
 const ITEMS: NavItem[] = [
-  { to: "/home", label: "Home", iconPath: I.home },
-  { to: "/camera", label: "Camera", iconPath: I.camera },
-  { to: "/gallery", label: "Gallery", iconPath: I.gallery },
-  { to: "/schedule", label: "Schedule", iconPath: I.schedule },
-  { to: "/destinations", label: "Destinations", iconPath: I.upload },
-  { to: "/terminal", label: "Terminal", iconPath: I.terminal },
-  { to: "/settings/general", label: "Settings", iconPath: I.settings },
+  { to: "/home", labelKey: "nav.home", iconPath: I.home },
+  { to: "/camera", labelKey: "nav.camera", iconPath: I.camera },
+  { to: "/gallery", labelKey: "nav.gallery", iconPath: I.gallery },
+  { to: "/schedule", labelKey: "nav.schedule", iconPath: I.schedule },
+  { to: "/destinations", labelKey: "nav.destinations", iconPath: I.upload },
+  { to: "/terminal", labelKey: "nav.terminal", iconPath: I.terminal },
+  { to: "/settings/general", labelKey: "nav.settings", iconPath: I.settings },
 ];
 
 export function Sidebar({ hostname, ip, firmware }: SidebarProps) {
+  const { t } = useI18n();
   return (
     <aside className="as-side">
       <div className="as-brand">
@@ -42,7 +44,7 @@ export function Sidebar({ hostname, ip, firmware }: SidebarProps) {
           }
         >
           <Icon d={item.iconPath} size={18} />
-          <span>{item.label}</span>
+          <span>{t(item.labelKey)}</span>
         </NavLink>
       ))}
       <div className="as-side-foot">

@@ -4,8 +4,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../../../components/Button";
 import { FormField, Select, TextInput } from "../../../components/FormField";
 import { settings, type GeneralSettings } from "../../../lib/bridge/settings";
+import { LOCALES, useI18n, type Locale } from "../../../lib/i18n";
 
 export function General() {
+  const { t, locale, setLocale } = useI18n();
   const { data, refetch } = useQuery({ queryKey: ["settings.general"], queryFn: settings.general });
   const [draft, setDraft] = useState<GeneralSettings | null>(null);
   useEffect(() => {
@@ -54,11 +56,13 @@ export function General() {
             <option>DD.MM.YYYY</option>
           </Select>
         </FormField>
-        <FormField label="Language">
-          <Select value={draft.language} onChange={(e) => setDraft({ ...draft, language: e.target.value })}>
-            <option>English</option>
-            <option>Deutsch</option>
-            <option>Français</option>
+        <FormField label={t("settings.language")} hint="Switches the cockpit language immediately.">
+          <Select value={locale} onChange={(e) => setLocale(e.target.value as Locale)}>
+            {LOCALES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.label}
+              </option>
+            ))}
           </Select>
         </FormField>
         <FormField label="NTP servers">

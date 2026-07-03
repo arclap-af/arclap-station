@@ -8,8 +8,11 @@ import { Icon, I } from "../components/icons";
 import { ErrorState, LoadingState } from "../components/states";
 import { home as homeApi, adaptTelemetry, type ActivityEvent, type Telemetry } from "../lib/bridge/home";
 import { useWebSocket } from "../lib/ws";
+import { useI18n } from "../lib/i18n";
 
 export function Home() {
+  // `t` below is the telemetry snapshot; alias the translator to `tr`.
+  const { t: tr } = useI18n();
   const [live, setLive] = useState<Telemetry | null>(null);
 
   const {
@@ -69,32 +72,32 @@ export function Home() {
       <div className="as-page" style={{ maxWidth: 1200 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16 }}>
           <div>
-            <h1 className="as-h1">Station overview</h1>
+            <h1 className="as-h1">{tr("home.title")}</h1>
             <div className="as-h1-sub">
               {t.hostname} · {t.ip} · v{t.firmware} · uptime {fmtUptime(t.uptime_seconds)}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <Pill tone={wsStatus === "open" ? "ok" : wsStatus === "connecting" ? "warn" : "gray"}>
-              {wsStatus === "open" ? "Live" : wsStatus === "connecting" ? "Connecting" : "Polled"}
+              {wsStatus === "open" ? "Live" : wsStatus === "connecting" ? tr("status.connecting") : tr("home.polled")}
             </Pill>
             <Button style={{ padding: "6px 12px", fontSize: 12 }} onClick={() => refetch()}>
-              <Icon d={I.refresh} size={13} /> Refresh
+              <Icon d={I.refresh} size={13} /> {tr("common.refresh")}
             </Button>
           </div>
         </div>
 
         <div className="as-grid-4 as-stagger" style={{ marginBottom: 14 }}>
-          <Stat label="Status" val={t.status === "online" ? "Online" : t.status === "warn" ? "Warning" : "Offline"} sub={`Last sync ${t.last_sync_seconds_ago}s`} color="var(--as-accent-2)" />
-          <Stat label="Captures today" val={String(t.captures_today)} sub={t.next_capture_seconds !== null ? `Next in ${Math.round(t.next_capture_seconds / 60)} min` : "No active schedule"} />
-          <Stat label="Queue" val={String(t.queue_pending)} sub={`Avg upload ${t.avg_upload_seconds.toFixed(1)}s`} />
-          <Stat label="Storage" val={`${Math.round(t.storage_used_pct)}%`} sub={`${fmtBytes(t.storage_free_bytes)} free`} />
+          <Stat label={tr("home.status")} val={t.status === "online" ? tr("status.online") : t.status === "warn" ? tr("status.warning") : tr("status.offline")} sub={`Last sync ${t.last_sync_seconds_ago}s`} color="var(--as-accent-2)" />
+          <Stat label={tr("home.capturesToday")} val={String(t.captures_today)} sub={t.next_capture_seconds !== null ? `Next in ${Math.round(t.next_capture_seconds / 60)} min` : "No active schedule"} />
+          <Stat label={tr("home.queue")} val={String(t.queue_pending)} sub={`Avg upload ${t.avg_upload_seconds.toFixed(1)}s`} />
+          <Stat label={tr("home.storage")} val={`${Math.round(t.storage_used_pct)}%`} sub={`${fmtBytes(t.storage_free_bytes)} free`} />
         </div>
         <div className="as-grid-4 as-stagger" style={{ marginBottom: 18 }}>
-          <Stat label="CPU" val={`${Math.round(t.cpu_pct)}%`} sub={`${t.cpu_temp_c.toFixed(1)}°C`} />
-          <Stat label="Memory" val={`${Math.round(t.memory_used_mb)} MB`} sub={`of ${Math.round(t.memory_total_mb)} MB`} />
-          <Stat label="Network" val={`${t.network_throughput_mbps.toFixed(1)} Mbps`} sub={t.network_signal_dbm !== null ? `Wi-Fi · ${t.network_signal_dbm} dBm` : "Wired"} />
-          <Stat label="UPS" val={t.ups_pct !== null ? `${t.ups_pct}%` : "—"} sub={t.ups_status ?? "no UPS"} />
+          <Stat label={tr("home.cpu")} val={`${Math.round(t.cpu_pct)}%`} sub={`${t.cpu_temp_c.toFixed(1)}°C`} />
+          <Stat label={tr("home.memory")} val={`${Math.round(t.memory_used_mb)} MB`} sub={`of ${Math.round(t.memory_total_mb)} MB`} />
+          <Stat label={tr("home.network")} val={`${t.network_throughput_mbps.toFixed(1)} Mbps`} sub={t.network_signal_dbm !== null ? `Wi-Fi · ${t.network_signal_dbm} dBm` : "Wired"} />
+          <Stat label={tr("home.ups")} val={t.ups_pct !== null ? `${t.ups_pct}%` : "—"} sub={t.ups_status ?? "no UPS"} />
         </div>
 
         <div className="as-grid-2">
@@ -140,7 +143,7 @@ export function Home() {
 
         <div className="as-card" style={{ padding: 0, marginTop: 14, overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--as-line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>Recent activity</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{tr("home.recentActivity")}</div>
             <span style={{ fontSize: 11, color: "var(--as-ink-3)", fontFamily: "var(--as-mono)" }}>last {activity?.length ?? 0} events · journalctl</span>
           </div>
           <div style={{ fontFamily: "var(--as-mono)", fontSize: 11.5, padding: 8, lineHeight: 1.6 }}>
