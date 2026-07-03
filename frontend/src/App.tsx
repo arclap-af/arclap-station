@@ -103,11 +103,29 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const PAGE_TITLES: Record<string, string> = {
+  home: "Home",
+  camera: "Camera",
+  gallery: "Gallery",
+  schedule: "Schedule",
+  destinations: "Destinations",
+  terminal: "Terminal",
+  settings: "Settings",
+};
+
 function Shell() {
   // Wire global keyboard shortcuts inside the authenticated shell only —
   // so Login + Setup pages don't intercept keys.
   useGlobalHotkeys();
   const location = useLocation();
+
+  // Reflect the current page in the browser tab so operators juggling
+  // several station tabs (or scanning history) can tell them apart.
+  useEffect(() => {
+    const seg = location.pathname.split("/")[1] ?? "";
+    const name = PAGE_TITLES[seg];
+    document.title = name ? `${name} · Arclap Station` : "Arclap Station";
+  }, [location.pathname]);
   const {
     data: telemetry,
     isError: telemetryDown,

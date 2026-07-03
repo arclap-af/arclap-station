@@ -922,7 +922,11 @@ button:not(:disabled),
     border-bottom: 1px solid var(--as-line);
   }
   .as-side .as-brand { width: 100%; padding-bottom: 8px; border-bottom: 1px solid var(--as-line); margin-bottom: 6px; }
-  .as-nav-item { padding: 8px 10px; font-size: 12.5px; flex: 0 0 auto; }
+  /* Size to content so the nav flows as a compact horizontal row that
+     wraps, instead of inheriting the desktop sidebar's width:100% and
+     stacking one item per line (which ate ~280px of vertical space
+     above the content on field tablets). */
+  .as-nav-item { padding: 8px 12px; font-size: 12.5px; flex: 0 0 auto; width: auto; }
   .as-side-foot { display: none; }
   .as-page { padding: 16px; }
   .as-topbar { padding: 0 16px; gap: 8px; }
