@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiFetch } from "../api";
+import { telemetrySchema as telemetryDriftSchema, warnOnDrift } from "./schemas";
 
 // What the Home / Shell components consume. Fields are all optional or
 // have defaults — the dashboard renders gracefully on missing data.
@@ -154,6 +155,7 @@ export function adaptTelemetry(raw: Record<string, unknown>): Telemetry {
 export const home = {
   async telemetry(): Promise<Telemetry> {
     const raw = await apiFetch<Record<string, unknown>>("/home");
+    warnOnDrift(raw, telemetryDriftSchema, "home.telemetry");
     return adaptTelemetry(raw);
   },
   async activity(limit = 25): Promise<ActivityEvent[]> {

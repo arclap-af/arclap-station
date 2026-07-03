@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiFetch, apiJson } from "../api";
 import { obj, strOrNull } from "./json";
+import { destinationListSchema, warnOnDrift } from "./schemas";
 
 export const destinationKind = z.enum(["s3", "sftp", "ftp", "webhook", "local", "mqtt"]);
 export type DestinationKind = z.infer<typeof destinationKind>;
@@ -71,6 +72,7 @@ function toBackend(p: DestinationDraft): Record<string, unknown> {
 export const destinations = {
   async list(): Promise<Destination[]> {
     const raw = await apiJson("/destinations/list", z.array(z.record(z.unknown())));
+    warnOnDrift(raw, destinationListSchema, "destinations.list");
     return raw.map(adapt);
   },
   async test(payload: DestinationDraft): Promise<DestinationTest> {

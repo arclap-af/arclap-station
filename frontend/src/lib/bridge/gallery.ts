@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiFetch, apiJson, API_PREFIX } from "../api";
 import { obj } from "./json";
+import { galleryPhotoSchema, warnOnDrift } from "./schemas";
 
 // What the Gallery page renders. Built from the backend's PhotoRecord
 // in /api/gallery/list, with sensible fallbacks for fields the backend
@@ -96,6 +97,7 @@ export const gallery = {
     if (params?.query) qs.set("q", params.query);
     const path = `/gallery/list${qs.toString() ? `?${qs}` : ""}`;
     const resp = await apiJson(path, listResponseSchema);
+    warnOnDrift(resp.items, z.array(galleryPhotoSchema), "gallery.list");
     return resp.items.map(adaptPhoto);
   },
   async listPage(params: {
@@ -110,6 +112,7 @@ export const gallery = {
     qs.set("limit", String(params.limit));
     qs.set("offset", String(params.offset));
     const resp = await apiJson(`/gallery/list?${qs}`, listResponseSchema);
+    warnOnDrift(resp.items, z.array(galleryPhotoSchema), "gallery.listPage");
     return { items: resp.items.map(adaptPhoto), total: resp.total };
   },
   async bulkDelete(payload: {

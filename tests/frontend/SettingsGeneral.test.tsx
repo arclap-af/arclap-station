@@ -50,6 +50,8 @@ describe("Settings · General", () => {
     await user.type(nameInput, "Tower Crane 7");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(h.saveGeneral).toHaveBeenCalledOnce();
-    expect(h.saveGeneral.mock.calls[0][0].station_name).toBe("Tower Crane 7");
+    expect(h.saveGeneral).toHaveBeenCalledWith(
+      expect.objectContaining({ station_name: "Tower Crane 7" }),
+    );
   });
 });

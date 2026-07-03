@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { apiFetch, apiJson } from "../api";
 import { arr, obj } from "./json";
+import { scheduleListSchema, warnOnDrift } from "./schemas";
 
 // Flat shape the Schedule UI renders.
 export interface Schedule {
@@ -95,6 +96,7 @@ function toBackendPayload(p: ScheduleDraft): Record<string, unknown> {
 export const schedule = {
   async list(): Promise<Schedule[]> {
     const raw = await apiJson("/schedule/list", z.array(z.record(z.unknown())));
+    warnOnDrift(raw, scheduleListSchema, "schedule.list");
     return raw.map(adaptSchedule);
   },
   async create(payload: ScheduleDraft): Promise<Schedule> {
