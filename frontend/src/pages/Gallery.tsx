@@ -178,6 +178,19 @@ export function Gallery() {
     bulkDeleteMut.mutate({ all: true, filter, query });
   };
 
+  const downloadAll = () => {
+    if (total === 0) return;
+    // Stream the whole matching set as one ZIP (each file named with its
+    // capture timestamp). A same-origin anchor click sends the session
+    // cookie and lets the browser handle the (potentially large) download.
+    const a = document.createElement("a");
+    a.href = gallery.downloadAllUrl({ filter, query });
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   const totalBytes = photos.reduce((s, p) => s + p.size_bytes, 0);
   const uploaded = photos.filter((p) => p.uploads.some((u) => u.state === "uploaded")).length;
   const pending = photos.length - uploaded;
@@ -289,18 +302,27 @@ export function Gallery() {
             </>
           )}
 
-          {/* "Delete all" stays separate from the selection-based bulk
-              delete so a click here is unambiguously "everything",
-              not the dynamic N from the current selection. Two-step
-              confirm (count + DELETE keyword) inside deleteAll(). */}
-          {photos.length > 0 && selected.size === 0 && (
-            <Button
-              style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--as-bad)", marginLeft: "auto" }}
-              onClick={deleteAll}
-              title="Remove every photo from the SD card. Remote copies are preserved."
-            >
-              Delete all ({photos.length})
-            </Button>
+          {/* "Download all" + "Delete all" — whole-matching-set actions,
+              grouped on the right and shown only when nothing is
+              individually selected so a click is unambiguously
+              "everything", not the dynamic N from the current selection. */}
+          {total > 0 && selected.size === 0 && (
+            <>
+              <Button
+                style={{ padding: "6px 10px", fontSize: 11.5, marginLeft: "auto" }}
+                onClick={downloadAll}
+                title="Download every photo in this view as one ZIP — each file is named with its capture timestamp."
+              >
+                <Icon d={I.upload} size={13} style={{ transform: "rotate(180deg)" }} /> Download all ({total})
+              </Button>
+              <Button
+                style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--as-bad)" }}
+                onClick={deleteAll}
+                title="Remove every photo from the SD card. Remote copies are preserved."
+              >
+                Delete all ({total})
+              </Button>
+            </>
           )}
         </div>
 

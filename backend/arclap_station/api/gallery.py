@@ -2,17 +2,45 @@
 
 from __future__ import annotations
 
+import zipfile
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from arclap_station.api.deps import require_session
 from arclap_station.audit import emit as audit_emit
 from arclap_station.photos.store import get_store
 from arclap_station.photos.thumbnails import generate_thumbnail
+
+
+class _ZipSink:
+    """Write-only, non-seekable sink for ``zipfile``.
+
+    Without ``tell()``/``seek()`` zipfile switches to streaming mode (data
+    descriptors), so we can drain + yield each file as it's added instead
+    of buffering the whole archive — the Pi never holds more than one
+    photo's worth of bytes in memory.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[bytes] = []
+
+    def write(self, data: bytes) -> int:
+        self._parts.append(bytes(data))
+        return len(data)
+
+    def flush(self) -> None:  # noqa: D401 - file-like protocol
+        pass
+
+    def drain(self) -> bytes:
+        chunk = b"".join(self._parts)
+        self._parts.clear()
+        return chunk
 
 
 def _timestamped_name(captured_at: str, original: str) -> str:
@@ -101,6 +129,57 @@ async def full_photo(
     # self-identifying (the pixels are untouched). Browsers ignore this
     # Content-Disposition for the lightbox <img>, so viewing still works.
     return FileResponse(src, filename=_timestamped_name(photo.captured_at, src.name))
+
+
+@router.get("/download-all")
+async def download_all(
+    date: str | None = Query(default=None),
+    filter: str | None = Query(default=None, alias="filter"),
+    q: str | None = Query(default=None),
+    _: dict[str, Any] = Depends(require_session),
+) -> StreamingResponse:
+    """Stream every matching photo as one ZIP, each entry named after its
+    capture timestamp.
+
+    Respects the same filter/search as the gallery list so "Download all"
+    matches what the operator sees. ZIP_STORED (JPEGs are already
+    compressed) + streaming so the Pi never buffers the whole archive.
+    """
+    photos = get_store().list(
+        limit=10_000_000, upload_filter=filter, query=q, date=date
+    )
+    audit_emit("user", "gallery.download_all", {"filter": filter, "query": q, "count": len(photos)})
+
+    def generate() -> Iterator[bytes]:
+        sink = _ZipSink()
+        used: dict[str, int] = {}
+        # sink is a write-only, non-seekable binary stream (zipfile then
+        # uses data descriptors); cast satisfies the IO[bytes] signature.
+        zf_target = cast(IO[bytes], sink)
+        with zipfile.ZipFile(zf_target, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+            for photo in photos:
+                src = Path(photo.path)
+                if not src.exists():
+                    continue  # file swept by retention — skip, don't fail the whole zip
+                name = _timestamped_name(photo.captured_at, src.name)
+                # Two captures in the same second would collide — suffix a counter.
+                if name in used:
+                    used[name] += 1
+                    stem, dot, ext = name.rpartition(".")
+                    name = f"{stem}_{used[name]}.{ext}" if dot else f"{name}_{used[name]}"
+                else:
+                    used[name] = 0
+                zf.write(src, arcname=name)
+                yield sink.drain()
+        yield sink.drain()
+
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d")
+    zipname = f"arclap-photos-{stamp}.zip"
+    return StreamingResponse(
+        generate(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{zipname}"'},
+    )
 
 
 class BulkDeleteBody(BaseModel):

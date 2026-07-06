@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders } from "./test-utils";
 import { Gallery } from "../../frontend/src/pages/Gallery";
+import { gallery } from "../../frontend/src/lib/bridge/gallery";
 
 const SAMPLE_PHOTO = {
   id: "p1",
@@ -36,6 +38,7 @@ vi.mock("../../frontend/src/lib/bridge/gallery", () => ({
     listPage: vi.fn(async () => ({ items: [SAMPLE_PHOTO], total: 1 })),
     list: vi.fn(async () => [SAMPLE_PHOTO]),
     bulkDelete: vi.fn(async () => 0),
+    downloadAllUrl: vi.fn(() => "/api/gallery/download-all"),
     star: vi.fn(async () => {}),
     retry: vi.fn(async () => {}),
     remove: vi.fn(async () => {}),
@@ -50,5 +53,18 @@ describe("Gallery", () => {
       expect(screen.getByText(/ph_1.jpg/)).toBeInTheDocument();
       expect(screen.getByText(/Synced/)).toBeInTheDocument();
     });
+  });
+
+  it("Download all requests a timestamped ZIP of the whole view", async () => {
+    // The handler builds an <a> and clicks it — stub the click so jsdom
+    // doesn't try to navigate.
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const user = userEvent.setup();
+    renderWithProviders(<Gallery />);
+    await screen.findByText(/ph_1.jpg/);
+    await user.click(screen.getByRole("button", { name: /Download all/i }));
+    expect(gallery.downloadAllUrl).toHaveBeenCalledWith({ filter: "all", query: "" });
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
   });
 });

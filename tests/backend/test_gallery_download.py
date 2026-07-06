@@ -55,3 +55,37 @@ def test_full_download_sets_timestamped_content_disposition(
 
     assert r.status_code == 200
     assert "2026-07-03_11-51-51_capt0022.jpg" in r.headers.get("content-disposition", "")
+
+
+def test_download_all_streams_zip_of_timestamped_photos(
+    client: Any, app: Any, fresh_db: Any, tmp_path: Path
+) -> None:
+    import io
+    import zipfile
+
+    from arclap_station.api.deps import require_session  # noqa: PLC0415
+    from arclap_station.photos.store import get_store  # noqa: PLC0415
+
+    store = get_store()
+    for i, minute in enumerate((0, 10)):
+        f = tmp_path / f"capt000{i}.jpg"
+        f.write_bytes(b"\xff\xd8\xff" + bytes([i]) * 20)
+        store.register(
+            f, size_bytes=23, captured_at=datetime(2026, 7, 3, 11, minute, 0, tzinfo=UTC)
+        )
+
+    app.dependency_overrides[require_session] = lambda: {}
+    try:
+        r = client.get("/api/gallery/download-all")
+    finally:
+        app.dependency_overrides.pop(require_session, None)
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/zip")
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    assert sorted(zf.namelist()) == [
+        "2026-07-03_11-00-00_capt0000.jpg",
+        "2026-07-03_11-10-00_capt0001.jpg",
+    ]
+    # bytes survive the ZIP round-trip (STORED, no compression).
+    assert zf.read("2026-07-03_11-00-00_capt0000.jpg") == b"\xff\xd8\xff" + bytes([0]) * 20

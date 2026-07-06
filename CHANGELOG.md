@@ -27,6 +27,10 @@ Latest cockpit + camera work. Verified live on `arclap-st-90107cb4`
   `2026-07-03_11-51-51_capt0022.jpg` (sortable, filesystem-safe) via the
   `/gallery/{id}/full` Content-Disposition. Applies to every existing
   photo (built at download time); the image pixels are never touched.
+- **"Download all" button** — streams the whole matching view (respects
+  the filter/search) as one ZIP, each entry named with its capture
+  timestamp. `ZIP_STORED` + streamed so the Pi never buffers the whole
+  archive; skips files already swept by retention.
 
 ### Cockpit (frontend)
 - **i18n** — English / German / French, dependency-free (~1 KB),

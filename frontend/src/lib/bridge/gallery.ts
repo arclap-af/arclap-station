@@ -135,6 +135,20 @@ export const gallery = {
     })) as { deleted?: number };
     return Number(raw?.deleted ?? 0);
   },
+  /**
+   * URL that streams every matching photo as one ZIP (each entry named
+   * with its capture timestamp). Same filter/search as the list, so it
+   * matches what the operator sees. The browser downloads it directly
+   * (the server sets the Content-Disposition filename); the session
+   * cookie rides along automatically on the same-origin request.
+   */
+  downloadAllUrl(params?: { filter?: string; query?: string }): string {
+    const qs = new URLSearchParams();
+    if (params?.filter && params.filter !== "all") qs.set("filter", params.filter);
+    if (params?.query) qs.set("q", params.query);
+    const s = qs.toString();
+    return `${API_PREFIX}/gallery/download-all${s ? `?${s}` : ""}`;
+  },
   async star(id: string, starred: boolean): Promise<void> {
     await apiFetch(`/gallery/${id}/star`, { method: "POST", body: { starred } });
   },
