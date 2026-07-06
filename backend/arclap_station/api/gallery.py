@@ -14,6 +14,22 @@ from arclap_station.audit import emit as audit_emit
 from arclap_station.photos.store import get_store
 from arclap_station.photos.thumbnails import generate_thumbnail
 
+
+def _timestamped_name(captured_at: str, original: str) -> str:
+    """Build a download filename prefixed with the capture timestamp.
+
+    e.g. captured_at="2026-07-03T11:51:51.12+00:00", original="capt0022.jpg"
+    -> "2026-07-03_11-51-51_capt0022.jpg". Sortable, filesystem-safe, and
+    the time matches what the gallery tile shows (we reformat the raw ISO
+    string rather than converting timezones). Falls back to the original
+    name if captured_at is missing/unparseable.
+    """
+    ts = (captured_at or "").replace("T", "_")[:19].replace(":", "-")
+    if len(ts) < 19:  # not a full date_time — don't prefix a partial stamp
+        return original
+    stem, dot, ext = original.rpartition(".")
+    return f"{ts}_{stem}.{ext}" if dot else f"{ts}_{original}"
+
 router = APIRouter(prefix="/api/gallery", tags=["gallery"])
 
 
@@ -81,7 +97,10 @@ async def full_photo(
     src = Path(photo.path)
     if not src.exists():
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="photo file missing")
-    return FileResponse(src)
+    # Name the download after the capture timestamp so a saved file is
+    # self-identifying (the pixels are untouched). Browsers ignore this
+    # Content-Disposition for the lightbox <img>, so viewing still works.
+    return FileResponse(src, filename=_timestamped_name(photo.captured_at, src.name))
 
 
 class BulkDeleteBody(BaseModel):
