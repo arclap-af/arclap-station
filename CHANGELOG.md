@@ -22,6 +22,12 @@ Latest cockpit + camera work. Verified live on `arclap-st-90107cb4`
   beside the presets, committed on blur/Enter so multi-digit typing isn't
   clamped mid-keystroke.
 
+### Gallery
+- **Downloaded photos are named with the capture timestamp** — e.g.
+  `2026-07-03_11-51-51_capt0022.jpg` (sortable, filesystem-safe) via the
+  `/gallery/{id}/full` Content-Disposition. Applies to every existing
+  photo (built at download time); the image pixels are never touched.
+
 ### Cockpit (frontend)
 - **i18n** — English / German / French, dependency-free (~1 KB),
   switchable in Settings › General, browser-language detected, `<html
