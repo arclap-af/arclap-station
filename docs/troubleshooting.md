@@ -97,9 +97,10 @@ USB 3.
 sudo -u arclap sqlite3 /var/lib/arclap/state.db \
   'select id, destination, status, retries, last_error from uploads order by id desc limit 20;'
 
-# What does each destination say?
+# What does each destination say? (Uploads run in-process now, so the
+# logs are in arclap-station, not a separate uploader unit.)
 ls -la /etc/arclap/destinations/
-sudo journalctl -u arclap-uploader -n 50
+sudo journalctl -u arclap-station -n 50 | grep -iE 'upload|destination'
 
 # Manual smoke test (replace with your real values):
 aws s3 cp /etc/hostname s3://your-bucket/test-$(date +%s) --profile arclap

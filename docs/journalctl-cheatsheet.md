@@ -88,8 +88,9 @@ sudo journalctl -u arclap-station -o json --since "1 hour ago" \
 sudo journalctl -u arclap-station --since "5 minutes ago" \
   | grep -c 'request_started'
 
-# Which destinations are erroring?
-sudo journalctl -u arclap-uploader -o json --since today \
+# Which destinations are erroring? (Uploads run in-process — logs are in
+# arclap-station, not a separate uploader unit.)
+sudo journalctl -u arclap-station -o json --since today \
   | jq -r 'select(.MESSAGE|test("upload_failed")) | .DESTINATION'
 
 # Did the watchdog restart anything?
